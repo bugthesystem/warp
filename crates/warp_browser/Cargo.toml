@@ -1,0 +1,19 @@
+[package]
+name = "warp_browser"
+version = "0.1.0"
+edition = "2024"
+description = "Embeds native web views as child views of Warp windows"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+pathfinder_geometry.workspace = true
+thiserror.workspace = true
+url.workspace = true
+warpui.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["NSView"] }
+wry.workspace = true

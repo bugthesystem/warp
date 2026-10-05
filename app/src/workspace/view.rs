@@ -249,6 +249,7 @@ use crate::banner::BannerState;
 use crate::billing::shared_objects_creation_denied_modal::{
     SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
 };
+use crate::browser::spike::BrowserSpike;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::persistence::CloudModel;
@@ -24532,6 +24533,10 @@ impl TypedActionView for Workspace {
             }
             OpenNetworkLogPane => {
                 self.open_network_log_pane(ctx);
+            }
+            ToggleBrowserSpike => {
+                let window_id = ctx.window_id();
+                BrowserSpike::handle(ctx).update(ctx, |spike, ctx| spike.toggle(window_id, ctx));
             }
             FixSettingsWithOz { error_description } => {
                 use crate::ai::skills::SkillManager;

@@ -877,6 +877,9 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Shows or removes a web view at a fixed rect in the window. Gated on
+    /// `FeatureFlag::BrowserPane`.
+    ToggleBrowserSpike,
     /// Opens or focuses a window scoped to the specified team.
     OpenNewWindowForTeam {
         team_uid: ServerId,
@@ -1210,6 +1213,7 @@ impl WorkspaceAction {
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
+            | ToggleBrowserSpike
             | OpenNewWindowForTeam { .. }
             | BrowseTeams
             | ShowTeamSwitcherMenu => false,

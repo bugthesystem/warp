@@ -2160,6 +2160,13 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| ContextFlag::NetworkLogConsole.is_enabled())]);
 
     app.register_editable_bindings([EditableBinding::new(
+        "workspace:toggle_browser_spike",
+        "Toggle browser spike",
+        WorkspaceAction::ToggleBrowserSpike,
+    )
+    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+
+    app.register_editable_bindings([EditableBinding::new(
         "input:clear_screen",
         "Clear screen",
         InputAction::ClearScreen,
