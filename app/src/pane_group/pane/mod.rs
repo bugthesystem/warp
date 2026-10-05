@@ -10,6 +10,7 @@
 //! used to render a [`PaneView`] which internally renders the pane, including the [`BackingView`].
 pub(super) mod ai_document_pane;
 pub(super) mod ai_fact_pane;
+pub(super) mod browser_pane;
 pub(super) mod code_diff_pane;
 pub(super) mod code_diff_pane_model;
 pub(super) mod code_pane;
@@ -48,6 +49,7 @@ use crate::ai::ai_document_view::AIDocumentView;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorView;
 use crate::ai::facts::AIFactView;
+use crate::browser::BrowserView;
 #[cfg(feature = "local_fs")]
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::view::CodeView;
@@ -146,6 +148,7 @@ pub(crate) enum IPaneType {
     ExecutionProfileEditor,
     GetStarted,
     NetworkLog,
+    Browser,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -170,6 +173,7 @@ impl Display for IPaneType {
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
+            IPaneType::Browser => write!(f, "Browser"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -274,6 +278,11 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::NetworkLog, ctx)
     }
 
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<BrowserView>>`].
+    pub fn from_browser_pane_ctx(ctx: &ViewContext<PaneView<BrowserView>>) -> Self {
+        Self::new_from_ctx(IPaneType::Browser, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
     pub fn from_terminal_pane_view(
         terminal_pane_view: &ViewHandle<terminal_pane::TerminalPaneView>,
@@ -376,6 +385,11 @@ impl PaneId {
         network_log_pane_view: &ViewHandle<PaneView<NetworkLogView>>,
     ) -> Self {
         Self::new(IPaneType::NetworkLog, network_log_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<BrowserView>`] entity ID.
+    pub fn from_browser_pane_view(browser_pane_view: &ViewHandle<PaneView<BrowserView>>) -> Self {
+        Self::new(IPaneType::Browser, browser_pane_view)
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -496,6 +510,9 @@ impl PaneId {
             }
             IPaneType::NetworkLog => {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::Browser => {
+                ChildView::<PaneView<BrowserView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]

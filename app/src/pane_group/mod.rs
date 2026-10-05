@@ -192,6 +192,7 @@ mod tests;
 
 pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
+pub use pane::browser_pane::BrowserPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
 pub use pane::custom_router_editor_pane::CustomRouterEditorPane;
@@ -2006,6 +2007,9 @@ impl PaneGroup {
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
             }
+            LeafContents::Browser => Err(anyhow::anyhow!(
+                "Browser pane should not have been persisted, as it cannot be restored"
+            )),
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))

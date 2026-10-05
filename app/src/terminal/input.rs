@@ -2160,9 +2160,9 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| ContextFlag::NetworkLogConsole.is_enabled())]);
 
     app.register_editable_bindings([EditableBinding::new(
-        "workspace:toggle_browser_spike",
-        "Toggle browser spike",
-        WorkspaceAction::ToggleBrowserSpike,
+        "workspace:open_browser_pane",
+        "Open browser pane",
+        WorkspaceAction::OpenBrowserPane { url: None },
     )
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 

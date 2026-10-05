@@ -1871,7 +1871,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| RecordingController::new());
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
     ctx.add_singleton_model(|_| NetworkLogPaneManager::default());
-    ctx.add_singleton_model(|_| browser::spike::BrowserSpike::default());
+    ctx.add_singleton_model(|_| browser::BrowserViewRegistry::default());
+    ctx.on_frame_drawn(|ctx, window_id| browser::sync_webviews(window_id, ctx));
     ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(ai::pricing_promotion::PricingPromotionState::new);
     ctx.add_singleton_model(|ctx| {

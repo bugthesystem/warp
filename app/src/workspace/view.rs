@@ -249,7 +249,6 @@ use crate::banner::BannerState;
 use crate::billing::shared_objects_creation_denied_modal::{
     SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
 };
-use crate::browser::spike::BrowserSpike;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::persistence::CloudModel;
@@ -302,10 +301,10 @@ use crate::palette::PaletteMode;
 use crate::pane_group::FilePane;
 use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::{
-    self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    CustomRouterEditorPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
-    ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
-    TabBarHoverIndex, TerminalPaneId,
+    self, AIFactPane, AnyPaneContent, BrowserPane, ChildAgentOrigin, CodeDiffPane, CodePane,
+    CodeReviewPanelArg, CustomRouterEditorPane, Direction as PaneGroupDirection, Direction,
+    EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions,
+    PaneGroup, PaneId, PanesLayout, TabBarHoverIndex, TerminalPaneId,
 };
 use crate::persistence::ModelEvent;
 use crate::projects::ProjectManagementModel;
@@ -15479,6 +15478,19 @@ impl Workspace {
     /// group. If a pane already exists for the current window, refreshes its
     /// snapshot from the in-memory model and focuses it instead of opening
     /// another one.
+    /// Opens a browser pane as a right-split of the active pane group.
+    fn open_browser_pane(&mut self, url: Option<String>, ctx: &mut ViewContext<Self>) {
+        let pane = BrowserPane::new(url, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(
+                Direction::Right,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
     pub(crate) fn open_network_log_pane(&mut self, ctx: &mut ViewContext<Self>) {
         let manager = NetworkLogPaneManager::handle(ctx);
 
@@ -24534,9 +24546,8 @@ impl TypedActionView for Workspace {
             OpenNetworkLogPane => {
                 self.open_network_log_pane(ctx);
             }
-            ToggleBrowserSpike => {
-                let window_id = ctx.window_id();
-                BrowserSpike::handle(ctx).update(ctx, |spike, ctx| spike.toggle(window_id, ctx));
+            OpenBrowserPane { url } => {
+                self.open_browser_pane(url.clone(), ctx);
             }
             FixSettingsWithOz { error_description } => {
                 use crate::ai::skills::SkillManager;
