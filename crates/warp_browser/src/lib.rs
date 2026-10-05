@@ -7,6 +7,7 @@
 #[cfg(not(target_family = "wasm"))]
 pub mod agent;
 pub mod history;
+pub mod local_servers;
 pub mod sites;
 mod url_input;
 

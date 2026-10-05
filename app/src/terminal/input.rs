@@ -2164,6 +2164,7 @@ pub fn init(app: &mut AppContext) {
         "Open browser pane",
         WorkspaceAction::OpenBrowserPane { url: None },
     )
+    .with_mac_key_binding("cmd-shift-B")
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 
     app.register_editable_bindings([EditableBinding::new(

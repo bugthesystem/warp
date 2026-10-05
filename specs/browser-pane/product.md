@@ -1,6 +1,6 @@
 # Product Spec: Embedded browser pane
 
-**Issue:** none (fork feature)
+**Issues:** [warpdotdev/warp#2164](https://github.com/warpdotdev/warp/issues/2164), [warpdotdev/warp#9194](https://github.com/warpdotdev/warp/issues/9194) (duplicate of #2164)
 **Figma:** none provided; the reference is Cursor's browser pane
 
 ## Summary
@@ -28,7 +28,7 @@ Developers running a dev server or reading docs alongside a terminal session swi
 ## Behavior
 
 1. With `FeatureFlag::BrowserPane` disabled, or on a platform other than macOS, no browser pane entry point is shown and no web view is created.
-2. "Open browser pane" in the command palette splits the active pane and opens a browser pane with one tab.
+2. "Open browser pane" in the command palette, or `⌘⇧B`, splits the active pane and opens a browser pane with one tab.
 3. The page is drawn exactly inside the pane's content area. It follows the pane when splits are resized, the window is resized or maximized, or the display scale changes.
 4. When the pane's Warp tab is not visible, the page is not visible. Returning to the tab shows it again in place.
 5. Warp's command palette, menus, modals and tooltips always appear above the page, never under it. While one covers the page, the page area is hidden.
@@ -56,7 +56,8 @@ Developers running a dev server or reading docs alongside a terminal session swi
 22. A new tab shows a start page instead of a web page. It lists local apps visited recently, sites opened by agents, and other recent sites, most recent first, each with its title and address. Clicking one loads it in that tab.
 23. Visited pages, their titles and whether an agent opened them are kept across restarts, up to the 200 most recent.
 24. After Warp restarts, each browser pane comes back with its tabs at the URLs they last showed, and the same tab active. Tabs showing the start page come back as start pages.
+25. Above its other sections, the start page (behavior 22) lists servers other processes on this machine are listening on (loopback or all interfaces, port 1024 and up), with the process name and `localhost` URL, so a dev server just started in a terminal is one click away. The list refreshes whenever a start page is shown or focused. macOS services such as AirPlay and common databases are left out.
 
 ## Success criteria
 
-Each behavior above can be checked by hand on a Mac. Behaviors 6, 16 (site matching), 22 (grouping) and 23 are covered by unit tests, and 24 by a persistence round-trip test.
+Each behavior above can be checked by hand on a Mac. Behaviors 6, 16 (site matching), 22 (grouping) and 23 are covered by unit tests, 24 by a persistence round-trip test, and 25 (parsing and filtering) by unit tests.

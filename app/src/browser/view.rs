@@ -1,5 +1,6 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
+use warp_browser::local_servers::LocalServer;
 use warp_browser::{WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
@@ -36,6 +37,7 @@ const NEW_TAB_TITLE: &str = "New Tab";
 
 /// Most recent sites listed on the new-tab page.
 const MAX_RECENTS: usize = 8;
+const MAX_LOCAL_SERVERS: usize = 6;
 
 const URL_FIELD_PLACEHOLDER: &str = "Search or enter URL";
 
@@ -110,6 +112,9 @@ pub struct BrowserView {
     auto_approve_button: MouseStateHandle,
     /// One per row the new-tab page can show, across its sections.
     recent_buttons: Vec<MouseStateHandle>,
+    /// Servers found listening on this machine when a new-tab page was last shown.
+    local_servers: Vec<LocalServer>,
+    local_server_buttons: Vec<MouseStateHandle>,
     events_tx: async_channel::Sender<(u64, WebViewEvent)>,
 }
 
@@ -195,6 +200,10 @@ impl BrowserView {
             recent_buttons: (0..MAX_RECENTS * 3)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
+            local_servers: Vec::new(),
+            local_server_buttons: (0..MAX_LOCAL_SERVERS)
+                .map(|_| MouseStateHandle::default())
+                .collect(),
             events_tx,
         };
         #[cfg(not(target_family = "wasm"))]
@@ -225,6 +234,8 @@ impl BrowserView {
     pub fn focus(&mut self, ctx: &mut ViewContext<Self>) {
         if self.active().url.is_empty() {
             ctx.focus(&self.url_editor);
+            #[cfg(not(target_family = "wasm"))]
+            self.refresh_local_servers(ctx);
             return;
         }
         match &self.active().webview {
@@ -371,6 +382,21 @@ impl BrowserView {
             .update(ctx, |registry, _| registry.set_current_tab(tab_id));
         self.show_url(ctx);
         self.sync_chrome(ctx);
+        #[cfg(not(target_family = "wasm"))]
+        if self.active().url.is_empty() {
+            self.refresh_local_servers(ctx);
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_local_servers(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            super::local_servers::detect_local_servers(),
+            |me, servers, ctx| {
+                me.local_servers = servers;
+                ctx.notify();
+            },
+        );
     }
 
     fn navigate_active_tab(&self, navigate: fn(&WebView) -> Result<(), warp_browser::Error>) {
@@ -673,8 +699,8 @@ impl BrowserView {
         .finish()
     }
 
-    /// Shown in place of a page while a tab has no URL: local apps, pages agents opened, and other
-    /// recent pages.
+    /// Shown in place of a page while a tab has no URL: servers running locally, local apps, pages
+    /// agents opened, and other recent pages.
     fn render_new_tab_page(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -691,7 +717,28 @@ impl BrowserView {
             ),
             (Icon::Clock, "Recent", &sections.recent),
         ];
-        let mut is_empty = true;
+        let mut is_empty = self.local_servers.is_empty();
+        if !is_empty {
+            column.add_child(
+                Container::new(section_heading(
+                    Icon::Terminal,
+                    "Running on this machine",
+                    appearance,
+                ))
+                .with_margin_top(14.)
+                .with_margin_bottom(4.)
+                .finish(),
+            );
+            for (server, mouse_state) in self.local_servers.iter().zip(&self.local_server_buttons) {
+                column.add_child(history_row(
+                    &server.url(),
+                    Some(&server.process),
+                    Icon::Terminal,
+                    mouse_state,
+                    appearance,
+                ));
+            }
+        }
         for (icon, heading, entries) in groups {
             if entries.is_empty() {
                 continue;

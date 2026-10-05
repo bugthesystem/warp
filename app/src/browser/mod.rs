@@ -4,6 +4,8 @@
 mod agent;
 mod geometry;
 mod history;
+#[cfg(not(target_family = "wasm"))]
+mod local_servers;
 mod registry;
 mod view;
 
