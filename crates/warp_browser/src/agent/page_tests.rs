@@ -90,9 +90,10 @@ fn click_script_moves_the_agent_cursor_before_clicking() {
     let script = click_script(4);
 
     let cursor = script.find("warpPointAt(el);").unwrap();
+    let press = script.find("warpPress(point);").unwrap();
     let click = script.find("el.click();").unwrap();
-    assert!(cursor < click, "{script}");
-    assert!(script.contains("}, 400);"), "{script}");
+    assert!(cursor < press && press < click, "{script}");
+    assert!(script.contains("}, 650);"), "{script}");
 }
 
 #[test]

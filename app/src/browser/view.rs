@@ -976,13 +976,14 @@ impl BrowserView {
             .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
             if state.is_hovered() {
                 let mut stack = Stack::new().with_child(pill.finish());
+                // Beside the pill rather than below it: anything drawn over the page hides it.
                 stack.add_positioned_overlay_child(
                     ui_builder.tool_tip(tooltip.to_owned()).build().finish(),
                     OffsetPositioning::offset_from_parent(
-                        vec2f(0., 4.),
+                        vec2f(-6., 0.),
                         ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomRight,
-                        ChildAnchor::TopRight,
+                        ParentAnchor::MiddleLeft,
+                        ChildAnchor::MiddleRight,
                     ),
                 );
                 stack.finish()

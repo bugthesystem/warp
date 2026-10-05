@@ -42,35 +42,67 @@ pub fn read_page_script() -> String {
 
 /// How long the agent cursor takes to reach an element before the click or typing happens.
 /// Tools wait this long, plus a margin, before reporting back.
-pub const ACTION_DELAY: Duration = Duration::from_millis(400);
+pub const ACTION_DELAY: Duration = Duration::from_millis(650);
 
-/// Defines `warpPointAt(el)`, which moves a visible agent cursor to an element and outlines the
-/// element, so the user can follow what the agent does.
-const AGENT_CURSOR_SCRIPT: &str = r##"const warpPointAt = el => {
+/// Defines `warpPointAt(el)`, which glides a visible agent cursor to an element, outlines it and
+/// returns the point it reached, and `warpPress(point)`, which shows a click there. The cursor
+/// starts where it last stopped on this site, kept in session storage across page loads.
+const AGENT_CURSOR_SCRIPT: &str = r##"const warpCursorKey = "__warpAgentCursor";
+const warpCursor = () => {
   const id = "__warp_agent_cursor";
   let cursor = document.getElementById(id);
-  if (!cursor) {
-    cursor = document.createElement("div");
-    cursor.id = id;
-    cursor.setAttribute("aria-hidden", "true");
-    cursor.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;"
-      + "transition:transform 350ms ease-out;transform:translate(-40px,-40px)";
-    cursor.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22">'
-      + '<path d="M2 2 L2 18 L7 13 L10.5 20 L13 19 L9.5 12 L16 12 Z" fill="#111" stroke="#fff" '
-      + 'stroke-width="1.5" stroke-linejoin="round"/></svg>';
-    document.documentElement.appendChild(cursor);
-    cursor.getBoundingClientRect();
-  }
+  if (cursor) return cursor;
+  let start = null;
+  try { start = JSON.parse(sessionStorage.getItem(warpCursorKey)); } catch (_) {}
+  if (!start) start = { x: innerWidth / 2, y: innerHeight - 48 };
+  cursor = document.createElement("div");
+  cursor.id = id;
+  cursor.setAttribute("aria-hidden", "true");
+  cursor.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;"
+    + "will-change:transform;transition:transform 550ms cubic-bezier(.22,.61,.36,1);"
+    + `transform:translate(${start.x}px,${start.y}px)`;
+  cursor.innerHTML = '<svg width="28" height="28" viewBox="0 0 28 28" style="display:block;'
+    + 'filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));transition:transform 120ms ease-out">'
+    + '<path d="M3 2 L3 22 L9 16.5 L13 25 L16.5 23.5 L12.5 15.5 L20.5 15.5 Z" fill="#7c5cff" '
+    + 'stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>'
+    + '<span style="position:absolute;left:20px;top:22px;padding:2px 8px;border-radius:999px;'
+    + 'background:#7c5cff;color:#fff;font:600 11px/16px -apple-system,system-ui,sans-serif;'
+    + 'white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3)">Agent</span>';
+  document.documentElement.appendChild(cursor);
+  cursor.getBoundingClientRect();
+  return cursor;
+};
+const warpPointAt = el => {
+  const cursor = warpCursor();
   const rect = el.getBoundingClientRect();
-  cursor.style.transform = `translate(${rect.left + rect.width / 2}px, ${rect.top + rect.height / 2}px)`;
+  const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  cursor.style.transform = `translate(${point.x}px, ${point.y}px)`;
+  try { sessionStorage.setItem(warpCursorKey, JSON.stringify(point)); } catch (_) {}
   const ring = document.createElement("div");
   ring.setAttribute("aria-hidden", "true");
   ring.style.cssText = `position:fixed;z-index:2147483646;pointer-events:none;`
-    + `left:${rect.left - 3}px;top:${rect.top - 3}px;width:${rect.width + 6}px;height:${rect.height + 6}px;`
-    + `border:2px solid #3b82f6;border-radius:6px;transition:opacity 600ms ease-out 350ms`;
+    + `left:${rect.left - 4}px;top:${rect.top - 4}px;width:${rect.width + 8}px;height:${rect.height + 8}px;`
+    + `border:2px solid #7c5cff;border-radius:8px;box-shadow:0 0 0 4px rgba(124,92,255,.18);`
+    + `opacity:0;transition:opacity 250ms ease-out`;
   document.documentElement.appendChild(ring);
-  requestAnimationFrame(() => { ring.style.opacity = "0"; });
-  setTimeout(() => ring.remove(), 1200);
+  setTimeout(() => { ring.style.opacity = "1"; }, 350);
+  setTimeout(() => { ring.style.opacity = "0"; }, 1300);
+  setTimeout(() => ring.remove(), 1700);
+  return point;
+};
+const warpPress = point => {
+  const arrow = warpCursor().firstElementChild;
+  arrow.style.transform = "scale(.82)";
+  setTimeout(() => { arrow.style.transform = ""; }, 140);
+  const ripple = document.createElement("div");
+  ripple.setAttribute("aria-hidden", "true");
+  ripple.style.cssText = `position:fixed;z-index:2147483646;pointer-events:none;`
+    + `left:${point.x - 18}px;top:${point.y - 18}px;width:36px;height:36px;border-radius:50%;`
+    + `background:rgba(124,92,255,.35);transform:scale(.2);opacity:1;`
+    + `transition:transform 450ms ease-out,opacity 450ms ease-out`;
+  document.documentElement.appendChild(ripple);
+  requestAnimationFrame(() => { ripple.style.transform = "scale(1.6)"; ripple.style.opacity = "0"; });
+  setTimeout(() => ripple.remove(), 600);
 };"##;
 
 /// A script that moves the agent cursor to the element `element` numbered by the last read, then
@@ -83,8 +115,9 @@ pub fn click_script(element: u64) -> String {
   const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
   if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
   el.scrollIntoView({{ block: "center" }});
-  warpPointAt(el);
+  const point = warpPointAt(el);
   setTimeout(() => {{
+    warpPress(point);
     if (el.focus) el.focus();
     el.click();
   }}, {delay_ms});
@@ -105,8 +138,9 @@ pub fn type_script(element: u64, text: &str, submit: bool) -> String {
   if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
   const text = {text};
   el.scrollIntoView({{ block: "center" }});
-  warpPointAt(el);
+  const point = warpPointAt(el);
   setTimeout(() => {{
+    warpPress(point);
     el.focus();
     if (el.isContentEditable) {{
       document.execCommand("selectAll");
