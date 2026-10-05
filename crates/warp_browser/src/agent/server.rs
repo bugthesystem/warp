@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Request, State};
@@ -26,17 +26,12 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 
 const SERVER_INSTRUCTIONS: &str = "Controls the browser panes in Warp. Call browser_read to see a \
 page's text and its numbered interactive elements, then act on an element by its number with \
-browser_click or browser_type. Element numbers change whenever browser_read runs.";
+browser_click or browser_type. Element numbers change whenever browser_read runs. Use \
+browser_console to check for errors after changing a page.";
 
-/// The bearer token this app process requires on browser MCP requests. It changes on every launch
-/// and is only handed to MCP clients Warp configures itself.
-pub fn session_token() -> &'static str {
-    static TOKEN: OnceLock<String> = OnceLock::new();
-    TOKEN.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
-}
-
-/// Builds the router serving the browser MCP endpoint. Tool calls are sent to `requests`.
-pub fn router(requests: async_channel::Sender<ToolRequest>) -> axum::Router {
+/// Builds the router serving the browser MCP endpoint, which requires `token` as a bearer token.
+/// Tool calls are sent to `requests`.
+pub fn router(requests: async_channel::Sender<ToolRequest>, token: &str) -> axum::Router {
     let service = StreamableHttpService::new(
         move || {
             Ok(BrowserMcpServer {
@@ -49,13 +44,13 @@ pub fn router(requests: async_channel::Sender<ToolRequest>) -> axum::Router {
     axum::Router::new()
         .nest_service(MCP_PATH, service)
         .layer(middleware::from_fn_with_state(
-            session_token(),
+            Arc::<str>::from(token),
             require_token,
         ))
 }
 
 async fn require_token(
-    State(token): State<&'static str>,
+    State(token): State<Arc<str>>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -64,7 +59,7 @@ async fn require_token(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|value| value == token);
+        .is_some_and(|value| value == &*token);
     if authorized {
         Ok(next.run(request).await)
     } else {
@@ -171,6 +166,16 @@ fn tool_definitions() -> Vec<Tool> {
             "browser_screenshot",
             "Take a PNG screenshot of what a browser tab shows.",
             json!({"tab": tab}),
+            &[],
+        ),
+        tool(
+            "browser_console",
+            "Read a browser tab's console messages, uncaught errors and failed network requests \
+             since the page loaded.",
+            json!({
+                "tab": tab,
+                "clear": {"type": "boolean", "description": "Clear the messages after reading. Defaults to false."}
+            }),
             &[],
         ),
         tool(

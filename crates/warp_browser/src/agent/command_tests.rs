@@ -82,3 +82,16 @@ fn unknown_tool_is_an_error() {
 
     assert_eq!(command, Err("Unknown tool `browser_fly`".to_owned()));
 }
+
+#[test]
+fn console_does_not_clear_by_default() {
+    let command = BrowserCommand::from_tool_call("browser_console", &args(json!({"tab": 1})));
+
+    assert_eq!(
+        command,
+        Ok(BrowserCommand::Console {
+            tab: Some(1),
+            clear: false,
+        })
+    );
+}

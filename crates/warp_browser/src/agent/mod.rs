@@ -7,7 +7,12 @@
 mod command;
 mod page;
 mod server;
+mod token;
 
 pub use command::{BrowserCommand, ToolOutput, ToolRequest};
-pub use page::{click_script, format_page_snapshot, read_page_script, type_script};
-pub use server::{MCP_PATH, router, session_token};
+pub use page::{
+    ACTION_DELAY, CONSOLE_CAPTURE_SCRIPT, click_script, console_script, format_console_messages,
+    format_page_snapshot, read_page_script, type_script,
+};
+pub use server::{MCP_PATH, router};
+pub use token::{load_or_create_token, new_token};

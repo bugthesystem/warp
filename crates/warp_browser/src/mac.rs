@@ -16,6 +16,7 @@ use wry::raw_window_handle::{
 };
 use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
+use crate::agent::CONSOLE_CAPTURE_SCRIPT;
 use crate::{Error, WebViewEvent};
 
 /// Message the focus script posts when the user clicks in the page.
@@ -71,6 +72,7 @@ impl WebView {
             .with_devtools(cfg!(debug_assertions))
             .with_back_forward_navigation_gestures(true)
             .with_initialization_script(FOCUS_SCRIPT)
+            .with_initialization_script(CONSOLE_CAPTURE_SCRIPT)
             .with_ipc_handler(move |request| {
                 if request.body() == PAGE_FOCUSED_MESSAGE {
                     on_page_focused(WebViewEvent::PageFocused);

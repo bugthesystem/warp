@@ -44,6 +44,7 @@ wry.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 reqwest.workspace = true
+tempfile.workspace = true
 rmcp = { workspace = true, features = [
     "client",
     "transport-streamable-http-client-reqwest",

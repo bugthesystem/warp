@@ -10,7 +10,7 @@ use warpui::keymap::FixedBinding;
 use warpui::{AppContext, View, id};
 
 #[cfg(not(target_family = "wasm"))]
-pub use agent::BrowserAgent;
+pub use agent::{BrowserAgent, claude_code_setup_command, mcp_token, mcp_url};
 pub use registry::{BrowserViewRegistry, sync_webviews};
 pub use view::{BrowserView, BrowserViewAction, BrowserViewEvent};
 

@@ -145,13 +145,9 @@ pub const BROWSER_MCP_SERVER_NAME: &str = "warp-browser";
 #[cfg(not(target_family = "wasm"))]
 pub fn browser_mcp_installation() -> TemplatableMCPServerInstallation {
     let server_config = serde_json::json!({
-        "url": format!(
-            "http://127.0.0.1:{}{}",
-            http_server::HttpServer::port(),
-            warp_browser::agent::MCP_PATH
-        ),
+        "url": crate::browser::mcp_url(),
         "headers": {
-            "Authorization": format!("Bearer {}", warp_browser::agent::session_token()),
+            "Authorization": format!("Bearer {}", crate::browser::mcp_token()),
         },
     });
     let mut root = serde_json::Map::new();

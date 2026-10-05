@@ -1,7 +1,8 @@
 //! Runs agents' browser tool calls against browser panes. Calls arrive from the browser MCP
 //! endpoint on Warp's local HTTP server.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use serde::Deserialize;
 use warp_browser::agent::{self, BrowserCommand, ToolOutput, ToolRequest};
@@ -11,6 +12,42 @@ use super::{BrowserView, BrowserViewRegistry};
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 type ToolResult = Result<ToolOutput, String>;
+
+const TOKEN_FILE_NAME: &str = "browser-mcp-token";
+
+/// The bearer token the browser MCP endpoint requires. It is stored in Warp's home config
+/// directory so MCP clients set up outside Warp, such as Claude Code, keep working across launches.
+pub fn mcp_token() -> &'static str {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let Some(path) =
+            warp_core::paths::warp_home_config_dir().map(|dir| dir.join(TOKEN_FILE_NAME))
+        else {
+            return agent::new_token();
+        };
+        agent::load_or_create_token(&path).unwrap_or_else(|err| {
+            log::warn!("Failed to store the browser MCP token; using one for this launch: {err:#}");
+            agent::new_token()
+        })
+    })
+}
+
+pub fn mcp_url() -> String {
+    format!(
+        "http://127.0.0.1:{}{}",
+        http_server::HttpServer::port(),
+        agent::MCP_PATH
+    )
+}
+
+/// A shell command that connects Claude Code to Warp's browser tools.
+pub fn claude_code_setup_command() -> String {
+    format!(
+        "claude mcp add --transport http warp-browser {} --header \"Authorization: Bearer {}\"",
+        mcp_url(),
+        mcp_token()
+    )
+}
 
 pub struct BrowserAgent {
     requests_tx: async_channel::Sender<ToolRequest>,
@@ -25,7 +62,7 @@ impl BrowserAgent {
 
     /// The router serving the browser MCP endpoint.
     pub fn router(&self) -> axum::Router {
-        agent::router(self.requests_tx.clone())
+        agent::router(self.requests_tx.clone(), mcp_token())
     }
 
     fn handle_request(&mut self, request: ToolRequest, ctx: &mut ModelContext<Self>) {
@@ -69,11 +106,21 @@ impl BrowserAgent {
                 }),
                 Err(message) => reply(Err(message)),
             },
+            BrowserCommand::Console { tab, clear } => {
+                evaluate_in_tab(tab, &agent::console_script(clear), ctx, move |result| {
+                    reply(
+                        result
+                            .and_then(|json| agent::format_console_messages(&json))
+                            .map(ToolOutput::Text),
+                    )
+                })
+            }
             BrowserCommand::Click { tab, element } => {
                 evaluate_in_tab(tab, &agent::click_script(element), ctx, move |result| {
-                    reply(action_result(result, || {
-                        format!("Clicked element {element}.")
-                    }))
+                    reply_after_action(
+                        action_result(result, || format!("Clicked element {element}.")),
+                        reply,
+                    )
                 })
             }
             BrowserCommand::Type {
@@ -86,9 +133,10 @@ impl BrowserAgent {
                 &agent::type_script(element, &text, submit),
                 ctx,
                 move |result| {
-                    reply(action_result(result, || {
-                        format!("Typed into element {element}.")
-                    }))
+                    reply_after_action(
+                        action_result(result, || format!("Typed into element {element}.")),
+                        reply,
+                    )
                 },
             ),
         }
@@ -219,6 +267,18 @@ fn evaluate_in_tab(
         {
             on_result(Err(format!("Could not run the script in the page: {err}")));
         }
+    });
+}
+
+/// The page runs clicks and typing once the agent cursor reaches the element, so wait for that
+/// before replying; otherwise the agent could read the page before the action happened.
+fn reply_after_action(result: ToolResult, reply: impl FnOnce(ToolResult) + Send + 'static) {
+    if result.is_err() {
+        return reply(result);
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(agent::ACTION_DELAY + Duration::from_millis(150));
+        reply(result);
     });
 }
 

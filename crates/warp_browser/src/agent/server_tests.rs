@@ -6,14 +6,16 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::json;
 
-use super::{MCP_PATH, router, session_token};
+use super::{MCP_PATH, router};
 use crate::agent::{ToolOutput, ToolRequest};
+
+const TOKEN: &str = "test-token";
 
 async fn serve() -> (String, async_channel::Receiver<ToolRequest>) {
     let (requests_tx, requests_rx) = async_channel::unbounded();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}{MCP_PATH}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, router(requests_tx)).await });
+    tokio::spawn(async move { axum::serve(listener, router(requests_tx, TOKEN)).await });
     (url, requests_rx)
 }
 
@@ -21,7 +23,7 @@ async fn connect(url: &str) -> RunningService<RoleClient, ClientConfig> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", session_token())).unwrap(),
+        HeaderValue::from_str(&format!("Bearer {TOKEN}")).unwrap(),
     );
     let client = reqwest::Client::builder()
         .default_headers(headers)
@@ -65,6 +67,7 @@ async fn lists_the_browser_tools() {
             "browser_navigate",
             "browser_read",
             "browser_screenshot",
+            "browser_console",
             "browser_click",
             "browser_type",
         ]

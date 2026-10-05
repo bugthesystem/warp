@@ -24549,6 +24549,22 @@ impl TypedActionView for Workspace {
             OpenBrowserPane { url } => {
                 self.open_browser_pane(url.clone(), ctx);
             }
+            #[cfg(not(target_family = "wasm"))]
+            CopyBrowserAgentSetup => {
+                ctx.clipboard().write(ClipboardContent::plain_text(
+                    crate::browser::claude_code_setup_command(),
+                ));
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::default(
+                        "Claude Code setup copied. Run it in a terminal to give Claude Code the \
+                         browser tools."
+                            .to_string(),
+                    );
+                    toast_stack.add_ephemeral_toast(toast, ctx);
+                });
+            }
+            #[cfg(target_family = "wasm")]
+            CopyBrowserAgentSetup => {}
             FixSettingsWithOz { error_description } => {
                 use crate::ai::skills::SkillManager;
                 let modify_settings_skill = SkillManager::as_ref(ctx)

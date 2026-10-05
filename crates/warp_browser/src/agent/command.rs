@@ -18,6 +18,10 @@ pub enum BrowserCommand {
     Screenshot {
         tab: Option<u64>,
     },
+    Console {
+        tab: Option<u64>,
+        clear: bool,
+    },
     Click {
         tab: Option<u64>,
         element: u64,
@@ -58,6 +62,10 @@ impl BrowserCommand {
             }),
             "browser_read" => Ok(Self::Read { tab }),
             "browser_screenshot" => Ok(Self::Screenshot { tab }),
+            "browser_console" => Ok(Self::Console {
+                tab,
+                clear: optional_bool(args, "clear")?.unwrap_or(false),
+            }),
             "browser_click" => Ok(Self::Click {
                 tab,
                 element: required_u64(args, "element")?,

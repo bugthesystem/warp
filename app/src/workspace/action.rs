@@ -882,6 +882,8 @@ pub enum WorkspaceAction {
     OpenBrowserPane {
         url: Option<String>,
     },
+    /// Copies a command that connects Claude Code to the browser pane's agent tools.
+    CopyBrowserAgentSetup,
     /// Opens or focuses a window scoped to the specified team.
     OpenNewWindowForTeam {
         team_uid: ServerId,
@@ -1216,6 +1218,7 @@ impl WorkspaceAction {
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
             | OpenBrowserPane { .. }
+            | CopyBrowserAgentSetup
             | OpenNewWindowForTeam { .. }
             | BrowseTeams
             | ShowTeamSwitcherMenu => false,
