@@ -1,4 +1,4 @@
-use super::{is_local_address, resolve_input};
+use super::{display_url, is_local_address, resolve_input};
 
 #[test]
 fn urls_with_known_schemes_load_as_typed() {
@@ -91,4 +91,31 @@ fn remote_addresses_and_searches_are_not_local() {
     assert!(!is_local_address("https://warp.dev"));
     assert!(!is_local_address("localhost.example.com"));
     assert!(!is_local_address("run localhost"));
+}
+
+#[test]
+fn display_url_drops_scheme_www_and_bare_trailing_slash() {
+    assert_eq!(display_url("https://www.google.com/"), "google.com");
+    assert_eq!(display_url("http://localhost:5173/"), "localhost:5173");
+}
+
+#[test]
+fn display_url_keeps_paths_and_queries() {
+    assert_eq!(
+        display_url("https://docs.rs/wry/latest/"),
+        "docs.rs/wry/latest/"
+    );
+    assert_eq!(
+        display_url("https://www.google.com/search?q=wry"),
+        "google.com/search?q=wry"
+    );
+}
+
+#[test]
+fn display_url_shows_other_schemes_as_they_are() {
+    assert_eq!(display_url("about:blank"), "about:blank");
+    assert_eq!(
+        display_url("file:///tmp/index.html"),
+        "file:///tmp/index.html"
+    );
 }

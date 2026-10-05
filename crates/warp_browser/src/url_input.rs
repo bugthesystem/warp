@@ -32,6 +32,22 @@ pub fn resolve_input(input: &str) -> String {
     format!("{SEARCH_URL_PREFIX}{query}")
 }
 
+/// A short form of `url` for an unfocused URL field: no `http(s)://` or `www.`, and no trailing
+/// slash on a bare host. Other URLs, such as `about:blank`, are shown as they are.
+pub fn display_url(url: &str) -> String {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return url.to_owned();
+    };
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    rest.strip_suffix('/')
+        .filter(|host| !host.contains('/'))
+        .unwrap_or(rest)
+        .to_owned()
+}
+
 /// Whether `input`, typed or clicked, points at this machine, such as a local dev server.
 pub fn is_local_address(input: &str) -> bool {
     url::Url::parse(&resolve_input(input))

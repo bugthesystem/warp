@@ -3,10 +3,10 @@ use warp_browser::{WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, SavePosition, Text,
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    Shrinkable, Text,
 };
-use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, BlurContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
@@ -15,9 +15,12 @@ use warpui::{
 
 use super::BrowserViewRegistry;
 use super::geometry::webview_bounds;
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::view::{self, HeaderContent, StandardHeader, StandardHeaderOptions};
+use crate::pane_group::pane::PaneHeaderAction;
+use crate::pane_group::pane::view::header::components::render_pane_header_buttons;
+use crate::pane_group::pane::view::header::render_pane_header_draggable;
+use crate::pane_group::pane::view::{self, HeaderContent};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
@@ -31,9 +34,13 @@ const URL_FIELD_PLACEHOLDER: &str = "Search or enter URL";
 
 const TOOLBAR_PADDING: f32 = 4.;
 
-const TAB_MAX_WIDTH: f32 = 200.;
+const TAB_MAX_WIDTH: f32 = 220.;
+
+const TAB_ICON_SIZE: f32 = 14.;
 
 const STATUS_ICON_SIZE: f32 = 16.;
+
+const CORNER_RADIUS: f32 = 6.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
@@ -48,14 +55,20 @@ pub enum BrowserViewAction {
     NewTab,
     SelectTab(u64),
     CloseTab(u64),
+    CloseActiveTab,
+    FocusUrlField,
 }
+
+/// Header clicks reach the view as custom pane header actions, since the header is not one of the
+/// view's descendants.
+type HeaderAction = PaneHeaderAction<BrowserHeaderAction, BrowserViewAction>;
 
 /// Actions for the pane header's overflow menu, which has no items.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserHeaderAction {}
 
-/// The content of a browser pane: a tab strip and a toolbar, and below them an empty content area
-/// with the active tab's native web view positioned over it.
+/// The content of a browser pane: a toolbar, and below it an empty content area with the active
+/// tab's native web view positioned over it. The pane header shows the tab strip.
 pub struct BrowserView {
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
@@ -97,8 +110,16 @@ impl BrowserView {
     pub fn new(url: Option<String>, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(DEFAULT_TITLE));
 
+        let appearance = Appearance::as_ref(ctx);
+        let url_text = TextOptions::ui_text(Some(appearance.ui_font_size()), appearance);
         let url_editor = ctx.add_typed_action_view(|ctx| {
-            let mut editor = EditorView::single_line(SingleLineEditorOptions::default(), ctx);
+            let mut editor = EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: url_text,
+                    ..Default::default()
+                },
+                ctx,
+            );
             editor.set_placeholder_text(URL_FIELD_PLACEHOLDER, ctx);
             editor
         });
@@ -245,11 +266,9 @@ impl BrowserView {
         self.unfocus_page();
         self.active_tab = index;
         let tab_id = self.active().id;
-        let url = self.active().url.clone();
         BrowserViewRegistry::handle(ctx)
             .update(ctx, |registry, _| registry.set_current_tab(tab_id));
-        self.url_editor
-            .update(ctx, |editor, ctx| editor.set_buffer_text(&url, ctx));
+        self.show_url(ctx);
         self.sync_chrome(ctx);
     }
 
@@ -281,15 +300,26 @@ impl BrowserView {
             .title
             .clone()
             .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
-        let url = active.url.clone();
         self.pane_configuration.update(ctx, |configuration, ctx| {
             configuration.set_title(title, ctx)
         });
         if !self.url_editor.is_focused(ctx) {
-            self.url_editor
-                .update(ctx, |editor, ctx| editor.set_buffer_text(&url, ctx));
+            self.show_url(ctx);
         }
         ctx.notify();
+    }
+
+    /// Shows the active tab's URL in the URL field: in full while the field has focus, and
+    /// shortened otherwise.
+    fn show_url(&mut self, ctx: &mut ViewContext<Self>) {
+        let url = &self.active().url;
+        let text = if self.url_editor.is_focused(ctx) {
+            url.clone()
+        } else {
+            warp_browser::display_url(url)
+        };
+        self.url_editor
+            .update(ctx, |editor, ctx| editor.set_buffer_text(&text, ctx));
     }
 
     fn handle_url_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
@@ -299,16 +329,14 @@ impl BrowserView {
                 let tab_id = self.active().id;
                 self.load_url(tab_id, warp_browser::resolve_input(&input), ctx);
             }
-            EditorEvent::Escape => {
-                let url = self.active().url.clone();
-                self.url_editor
-                    .update(ctx, |editor, ctx| editor.set_buffer_text(&url, ctx));
-            }
+            EditorEvent::Escape => self.show_url(ctx),
             EditorEvent::Focused => {
                 self.unfocus_page();
+                self.show_url(ctx);
                 self.url_editor
                     .update(ctx, |editor, ctx| editor.select_all(ctx));
             }
+            EditorEvent::Blurred => self.show_url(ctx),
             _ => {}
         }
     }
@@ -385,73 +413,162 @@ impl BrowserView {
         }
     }
 
-    fn render_tab_strip(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let mut strip = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(TOOLBAR_PADDING);
+    /// The tab strip shown in the pane header, with the pane's own header buttons on the right.
+    fn render_header_tabs(
+        &self,
+        header_ctx: &view::HeaderRenderContext<'_>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let is_pane_dragging = header_ctx.draggable_state.is_dragging();
 
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let is_active = index == self.active_tab;
-            let tab_id = tab.id;
-            let title = tab
-                .title
-                .clone()
-                .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
-            let label = Text::new_inline(
-                title,
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(if is_active {
-                theme.active_ui_text_color().into()
+        let mut tabs_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(TOOLBAR_PADDING)
+            .with_main_axis_size(if is_pane_dragging {
+                MainAxisSize::Min
             } else {
-                theme.nonactive_ui_text_color().into()
-            })
-            .finish();
-            let close = icon_button(appearance, Icon::X, false, tab.close_button.clone())
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(BrowserViewAction::CloseTab(tab_id))
-                })
-                .finish();
-            let background = is_active.then(|| theme.surface_2());
-            let chip = Hoverable::new(tab.tab_button.clone(), move |_| {
-                let mut container = Container::new(
-                    Flex::row()
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_spacing(TOOLBAR_PADDING)
-                        .with_child(Expanded::new(1., label).finish())
-                        .with_child(close)
-                        .finish(),
-                )
-                .with_horizontal_padding(8.)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-                if let Some(background) = background {
-                    container = container.with_background(background);
-                }
-                container.finish()
-            })
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(BrowserViewAction::SelectTab(tab_id))
-            })
-            .finish();
-            strip = strip.with_child(
+                MainAxisSize::Max
+            });
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let chip = self.render_tab_chip(tab, index == self.active_tab, appearance);
+            // Dragging lays the header out without width limits, which shrinkable children
+            // cannot handle.
+            tabs_row.add_child(if is_pane_dragging {
                 ConstrainedBox::new(chip)
                     .with_max_width(TAB_MAX_WIDTH)
-                    .finish(),
-            );
+                    .finish()
+            } else {
+                Shrinkable::new(
+                    1.,
+                    ConstrainedBox::new(chip)
+                        .with_max_width(TAB_MAX_WIDTH)
+                        .finish(),
+                )
+                .finish()
+            });
         }
+        tabs_row.add_child(header_button(
+            appearance,
+            Icon::Plus,
+            &self.new_tab_button,
+            BrowserViewAction::NewTab,
+        ));
 
-        strip
-            .with_child(nav_button(
-                appearance,
-                Icon::Plus,
-                &self.new_tab_button,
-                true,
-                BrowserViewAction::NewTab,
-            ))
-            .finish()
+        let draggable_spacer = render_pane_header_draggable::<BrowserView>(
+            self.pane_configuration.clone(),
+            Empty::new().finish(),
+            header_ctx.draggable_state.clone(),
+            app,
+        );
+        tabs_row.add_child(if is_pane_dragging {
+            draggable_spacer
+        } else {
+            Expanded::new(1., draggable_spacer).finish()
+        });
+
+        let clipped_tabs = Clipped::new(tabs_row.finish()).finish();
+        let show_close_button = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_in_split_pane(app));
+        let buttons = render_pane_header_buttons::<BrowserHeaderAction, BrowserViewAction>(
+            header_ctx,
+            appearance,
+            show_close_button,
+            None,
+            None,
+        );
+
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(if is_pane_dragging {
+                    clipped_tabs
+                } else {
+                    Expanded::new(1., clipped_tabs).finish()
+                })
+                .with_child(Align::new(buttons).finish())
+                .finish(),
+        )
+        .with_horizontal_padding(TOOLBAR_PADDING)
+        .finish()
+    }
+
+    fn render_tab_chip(
+        &self,
+        tab: &BrowserTab,
+        is_active: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let tab_id = tab.id;
+        let title = tab
+            .title
+            .clone()
+            .unwrap_or_else(|| warp_browser::display_url(&tab.url));
+        let text_color = if is_active {
+            theme.active_ui_text_color()
+        } else {
+            theme.nonactive_ui_text_color()
+        };
+        let icon = if tab.is_loading {
+            Icon::Loading
+        } else {
+            Icon::Globe
+        };
+        let icon = ConstrainedBox::new(icon.to_warpui_icon(text_color).finish())
+            .with_width(TAB_ICON_SIZE)
+            .with_height(TAB_ICON_SIZE)
+            .finish();
+        let label = Text::new_inline(
+            title,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(text_color.into())
+        .finish();
+        let close_button = tab.close_button.clone();
+        let close = header_button(
+            appearance,
+            Icon::X,
+            &tab.close_button,
+            BrowserViewAction::CloseTab(tab_id),
+        );
+        let background = is_active.then(|| theme.surface_2());
+
+        Hoverable::new(tab.tab_button.clone(), move |state| {
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.)
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., label).finish());
+            if is_active || state.is_hovered() {
+                row.add_child(close);
+            }
+            let mut container = Container::new(row.finish())
+                .with_horizontal_padding(8.)
+                .with_vertical_padding(2.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS)));
+            if let Some(background) = background {
+                container = container.with_background(background);
+            }
+            container.finish()
+        })
+        .on_click(move |ctx, _, _| {
+            let close_hovered = close_button.lock().is_ok_and(|handle| handle.is_hovered());
+            if !close_hovered {
+                ctx.dispatch_typed_action(HeaderAction::CustomAction(
+                    BrowserViewAction::SelectTab(tab_id),
+                ));
+            }
+        })
+        .on_middle_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(HeaderAction::CustomAction(BrowserViewAction::CloseTab(
+                tab_id,
+            )));
+        })
+        .finish()
     }
 
     fn render_toolbar(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -461,12 +578,13 @@ impl BrowserView {
             .text_input(self.url_editor.clone())
             .with_style(UiComponentStyles {
                 padding: Some(Coords {
-                    top: 4.,
-                    bottom: 4.,
-                    left: 8.,
-                    right: 8.,
+                    top: 5.,
+                    bottom: 5.,
+                    left: 12.,
+                    right: 12.,
                 }),
                 background: Some(appearance.theme().surface_2().into()),
+                border_radius: Some(CornerRadius::with_all(Radius::Percentage(50.))),
                 ..Default::default()
             })
             .build()
@@ -554,6 +672,21 @@ fn create_webview(
     }
 }
 
+/// A button in the pane header, which dispatches through the header's custom actions.
+fn header_button(
+    appearance: &Appearance,
+    icon: Icon,
+    mouse_state: &MouseStateHandle,
+    action: BrowserViewAction,
+) -> Box<dyn Element> {
+    icon_button(appearance, icon, false, mouse_state.clone())
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(HeaderAction::CustomAction(action.clone()))
+        })
+        .finish()
+}
+
 fn nav_button(
     appearance: &Appearance,
     icon: Icon,
@@ -623,15 +756,10 @@ impl View for BrowserView {
 
         Flex::column()
             .with_child(
-                Container::new(
-                    Flex::column()
-                        .with_spacing(TOOLBAR_PADDING)
-                        .with_child(self.render_tab_strip(appearance))
-                        .with_child(self.render_toolbar(appearance))
-                        .finish(),
-                )
-                .with_uniform_padding(TOOLBAR_PADDING)
-                .finish(),
+                Container::new(self.render_toolbar(appearance))
+                    .with_uniform_padding(TOOLBAR_PADDING)
+                    .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
+                    .finish(),
             )
             .with_child(Expanded::new(1., content_area).finish())
             .finish()
@@ -649,6 +777,11 @@ impl TypedActionView for BrowserView {
             }
             BrowserViewAction::SelectTab(tab_id) => self.select_tab(*tab_id, ctx),
             BrowserViewAction::CloseTab(tab_id) => self.close_tab(*tab_id, ctx),
+            BrowserViewAction::CloseActiveTab => {
+                let tab_id = self.active().id;
+                self.close_tab(tab_id, ctx);
+            }
+            BrowserViewAction::FocusUrlField => ctx.focus(&self.url_editor),
             BrowserViewAction::GoBack => self.navigate_active_tab(WebView::go_back),
             BrowserViewAction::GoForward => self.navigate_active_tab(WebView::go_forward),
             BrowserViewAction::Reload => self.navigate_active_tab(WebView::reload),
@@ -658,7 +791,7 @@ impl TypedActionView for BrowserView {
 
 impl BackingView for BrowserView {
     type PaneHeaderOverflowMenuAction = BrowserHeaderAction;
-    type CustomAction = BrowserHeaderAction;
+    type CustomAction = BrowserViewAction;
     type AssociatedData = ();
 
     fn handle_pane_header_overflow_menu_action(
@@ -667,6 +800,10 @@ impl BackingView for BrowserView {
         _ctx: &mut ViewContext<Self>,
     ) {
         match *action {}
+    }
+
+    fn handle_custom_action(&mut self, action: &BrowserViewAction, ctx: &mut ViewContext<Self>) {
+        self.handle_action(action, ctx);
     }
 
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
@@ -679,24 +816,13 @@ impl BackingView for BrowserView {
 
     fn render_header_content(
         &self,
-        _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        ctx: &view::HeaderRenderContext<'_>,
+        app: &AppContext,
     ) -> HeaderContent {
-        HeaderContent::Standard(StandardHeader {
-            title: self
-                .active()
-                .title
-                .clone()
-                .unwrap_or_else(|| DEFAULT_TITLE.to_owned()),
-            title_secondary: None,
-            title_style: None,
-            title_clip_config: ClipConfig::end(),
-            title_max_width: None,
-            left_of_title: None,
-            right_of_title: None,
-            left_of_overflow: None,
-            options: StandardHeaderOptions::default(),
-        })
+        HeaderContent::Custom {
+            element: self.render_header_tabs(ctx, app),
+            has_custom_draggable_behavior: true,
+        }
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
