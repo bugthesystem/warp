@@ -97,6 +97,13 @@ fn console_does_not_clear_by_default() {
 }
 
 #[test]
+fn parses_annotations_without_arguments() {
+    let command = BrowserCommand::from_tool_call("browser_annotations", &args(json!({})));
+
+    assert_eq!(command, Ok(BrowserCommand::Annotations));
+}
+
+#[test]
 fn tab_is_reported_for_commands_that_act_on_a_tab() {
     let click = BrowserCommand::Click {
         tab: Some(3),

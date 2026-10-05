@@ -28,7 +28,8 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 const SERVER_INSTRUCTIONS: &str = "Controls the browser panes in Warp. Call browser_read to see a \
 page's text and its numbered interactive elements, then act on an element by its number with \
 browser_click or browser_type. Element numbers change whenever browser_read runs. Use \
-browser_console to check for errors after changing a page.";
+browser_console to check for errors after changing a page, and browser_annotations to read notes \
+the user pinned to page elements.";
 
 /// Builds the router serving the browser MCP endpoint, which requires `token` as a bearer token.
 /// Tool calls are sent to `requests`.
@@ -178,6 +179,15 @@ fn tool_definitions() -> Vec<Tool> {
                 "tab": tab,
                 "clear": {"type": "boolean", "description": "Clear the messages after reading. Defaults to false."}
             }),
+            &[],
+        ),
+        tool(
+            "browser_annotations",
+            "Read the notes the user pinned to page elements with Annotate in the browser pane, \
+             each with the element, a CSS selector, the page URL and the element's HTML. Returns \
+             the notes added since the last call. Call it when the user mentions their \
+             annotations, selection or notes in the browser.",
+            json!({}),
             &[],
         ),
         tool(

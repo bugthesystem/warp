@@ -6,6 +6,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 pub mod agent;
+pub mod annotation;
 pub mod history;
 pub mod local_servers;
 pub mod sites;
@@ -39,6 +40,10 @@ pub enum WebViewEvent {
     },
     /// The user clicked in the page, which gave it keyboard focus.
     PageFocused,
+    /// The user saved a note in annotate mode, as JSON for [`annotation::PageAnnotation::parse`].
+    Annotation(String),
+    /// The user left annotate mode from the page.
+    AnnotateExited,
 }
 
 #[derive(Debug, thiserror::Error)]

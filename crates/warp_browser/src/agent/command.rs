@@ -32,6 +32,7 @@ pub enum BrowserCommand {
         text: String,
         submit: bool,
     },
+    Annotations,
 }
 
 /// What a tool returns to the agent.
@@ -58,7 +59,7 @@ impl BrowserCommand {
             | Self::Console { tab, .. }
             | Self::Click { tab, .. }
             | Self::Type { tab, .. } => *tab,
-            Self::Open { .. } | Self::ListTabs => None,
+            Self::Open { .. } | Self::ListTabs | Self::Annotations => None,
         }
     }
 
@@ -90,6 +91,7 @@ impl BrowserCommand {
                 text: required_string(args, "text")?,
                 submit: optional_bool(args, "submit")?.unwrap_or(false),
             }),
+            "browser_annotations" => Ok(Self::Annotations),
             _ => Err(format!("Unknown tool `{name}`")),
         }
     }

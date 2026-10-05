@@ -17,6 +17,7 @@ use wry::raw_window_handle::{
 use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
 use crate::agent::CONSOLE_CAPTURE_SCRIPT;
+use crate::annotation::{ANNOTATE_EXITED_MESSAGE, ANNOTATION_MESSAGE_PREFIX};
 use crate::{Error, WebViewEvent};
 
 /// Message the focus script posts when the user clicks in the page.
@@ -63,7 +64,7 @@ impl WebView {
     ) -> Result<Self, Error> {
         let on_event: Rc<dyn Fn(WebViewEvent)> = Rc::new(on_event);
         let on_title_changed = on_event.clone();
-        let on_page_focused = on_event.clone();
+        let on_ipc = on_event.clone();
         let on_page_load = on_event;
 
         let webview = WebViewBuilder::new()
@@ -74,8 +75,13 @@ impl WebView {
             .with_initialization_script(FOCUS_SCRIPT)
             .with_initialization_script(CONSOLE_CAPTURE_SCRIPT)
             .with_ipc_handler(move |request| {
-                if request.body() == PAGE_FOCUSED_MESSAGE {
-                    on_page_focused(WebViewEvent::PageFocused);
+                let body = request.body();
+                if body == PAGE_FOCUSED_MESSAGE {
+                    on_ipc(WebViewEvent::PageFocused);
+                } else if body == ANNOTATE_EXITED_MESSAGE {
+                    on_ipc(WebViewEvent::AnnotateExited);
+                } else if let Some(json) = body.strip_prefix(ANNOTATION_MESSAGE_PREFIX) {
+                    on_ipc(WebViewEvent::Annotation(json.to_owned()));
                 }
             })
             .with_document_title_changed_handler(move |title| {

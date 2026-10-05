@@ -1,9 +1,14 @@
+use std::time::Duration;
+
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
+use warp_browser::annotation::{PageAnnotation, annotate_script, format_annotations};
 use warp_browser::local_servers::LocalServer;
 use warp_browser::{WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
+use warpui::r#async::Timer;
+use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle,
@@ -38,6 +43,7 @@ const NEW_TAB_TITLE: &str = "New Tab";
 /// Most recent sites listed on the new-tab page.
 const MAX_RECENTS: usize = 8;
 const MAX_LOCAL_SERVERS: usize = 6;
+const NOTICE_DURATION: Duration = Duration::from_secs(2);
 
 const URL_FIELD_PLACEHOLDER: &str = "Search or enter URL";
 
@@ -71,6 +77,8 @@ pub enum BrowserViewAction {
     OpenUrl(String),
     ResolveAgentApproval(AgentApproval),
     ToggleAgentAutoApprove,
+    ToggleAnnotate,
+    CopyScreenshot,
 }
 
 /// The user's answer when an agent asks to use a site that is not local.
@@ -104,6 +112,13 @@ pub struct BrowserView {
     new_tab_button: MouseStateHandle,
     /// Whether the active page, rather than Warp, has keyboard focus.
     page_focused: bool,
+    /// Whether the active page is in annotate mode, where clicking an element adds a note for
+    /// agents instead of acting on it.
+    annotating: bool,
+    annotate_button: MouseStateHandle,
+    screenshot_button: MouseStateHandle,
+    /// Confirmation shown briefly in the toolbar.
+    notice: Option<&'static str>,
     /// A site an agent is waiting for the user to approve.
     agent_approval_site: Option<String>,
     approve_once_button: MouseStateHandle,
@@ -192,6 +207,10 @@ impl BrowserView {
             reload_button: MouseStateHandle::default(),
             new_tab_button: MouseStateHandle::default(),
             page_focused: false,
+            annotating: false,
+            annotate_button: MouseStateHandle::default(),
+            screenshot_button: MouseStateHandle::default(),
+            notice: None,
             agent_approval_site: None,
             approve_once_button: MouseStateHandle::default(),
             approve_always_button: MouseStateHandle::default(),
@@ -375,6 +394,7 @@ impl BrowserView {
     }
 
     fn activate(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        self.set_annotating(false, ctx);
         self.unfocus_page();
         self.active_tab = index;
         let tab_id = self.active().id;
@@ -395,6 +415,73 @@ impl BrowserView {
             |me, servers, ctx| {
                 me.local_servers = servers;
                 ctx.notify();
+            },
+        );
+    }
+
+    /// Turns annotate mode on or off in the active page. Turning it on gives the page keyboard
+    /// focus so it receives Escape.
+    fn set_annotating(&mut self, annotating: bool, ctx: &mut ViewContext<Self>) {
+        if self.annotating == annotating {
+            return;
+        }
+        let Some(placed) = &self.active().webview else {
+            return;
+        };
+        if let Err(err) = placed
+            .webview
+            .evaluate(&annotate_script(annotating), |_| {})
+        {
+            report_error!(anyhow::Error::new(err).context("Failed to toggle annotate mode"));
+            return;
+        }
+        self.annotating = annotating;
+        if annotating {
+            self.focus(ctx);
+        }
+        ctx.notify();
+    }
+
+    /// Shows `message` in the toolbar for a moment. A toast would be drawn over the page, which
+    /// hides it.
+    fn show_notice(&mut self, message: &'static str, ctx: &mut ViewContext<Self>) {
+        self.notice = Some(message);
+        ctx.notify();
+        ctx.spawn(Timer::after(NOTICE_DURATION), move |me, _, ctx| {
+            if me.notice == Some(message) {
+                me.notice = None;
+                ctx.notify();
+            }
+        });
+    }
+
+    /// Copies a screenshot of the active page to the clipboard, for pasting into an agent.
+    fn copy_screenshot(&self, ctx: &mut ViewContext<Self>) {
+        let Some(placed) = &self.active().webview else {
+            return;
+        };
+        let (png_tx, png_rx) = futures::channel::oneshot::channel();
+        placed.webview.snapshot_png(move |png| {
+            let _ = png_tx.send(png);
+        });
+        ctx.spawn(
+            async move { png_rx.await.ok().flatten() },
+            |me, png, ctx| {
+                let message = match png {
+                    Some(data) => {
+                        ctx.clipboard().write(ClipboardContent {
+                            images: Some(vec![ImageData {
+                                data,
+                                mime_type: "image/png".to_owned(),
+                                filename: Some("screenshot.png".to_owned()),
+                            }]),
+                            ..Default::default()
+                        });
+                        "Screenshot copied"
+                    }
+                    None => "Couldn't take a screenshot",
+                };
+                me.show_notice(message, ctx);
             },
         );
     }
@@ -492,6 +579,9 @@ impl BrowserView {
             WebViewEvent::LoadStarted { url } => {
                 tab.is_loading = true;
                 tab.url = url;
+                if index == self.active_tab {
+                    self.annotating = false;
+                }
             }
             WebViewEvent::LoadFinished { url } => {
                 tab.is_loading = false;
@@ -506,6 +596,23 @@ impl BrowserView {
                 }
             }
             WebViewEvent::PageFocused => {}
+            WebViewEvent::Annotation(json) => {
+                if let Some(annotation) = PageAnnotation::parse(&json) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(format_annotations(
+                            std::slice::from_ref(&annotation),
+                        )));
+                    #[cfg(not(target_family = "wasm"))]
+                    super::BrowserAgent::handle(ctx)
+                        .update(ctx, |agent, ctx| agent.add_annotation(annotation, ctx));
+                    self.show_notice("Note copied for your agent", ctx);
+                }
+            }
+            WebViewEvent::AnnotateExited => {
+                if index == self.active_tab {
+                    self.annotating = false;
+                }
+            }
         }
         if index == self.active_tab {
             self.sync_chrome(ctx);
@@ -905,6 +1012,33 @@ impl BrowserView {
                 .finish(),
             )
             .with_child(Expanded::new(1., url_field).finish())
+            .with_children(self.notice.map(|notice| {
+                Text::new_inline(
+                    notice,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(appearance.theme().accent().into())
+                .finish()
+            }))
+            .with_child(
+                icon_button(
+                    appearance,
+                    Icon::MessagePlusSquare,
+                    self.annotating,
+                    self.annotate_button.clone(),
+                )
+                .build()
+                .on_click(|ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::ToggleAnnotate))
+                .finish(),
+            )
+            .with_child(nav_button(
+                appearance,
+                Icon::Image,
+                &self.screenshot_button,
+                active.webview.is_some(),
+                BrowserViewAction::CopyScreenshot,
+            ))
             .with_child(self.render_auto_approve_switch(appearance, app))
             .finish()
     }
@@ -1260,6 +1394,8 @@ impl TypedActionView for BrowserView {
                 super::BrowserAgent::handle(ctx)
                     .update(ctx, |agent, ctx| agent.toggle_auto_approve(ctx));
             }
+            BrowserViewAction::ToggleAnnotate => self.set_annotating(!self.annotating, ctx),
+            BrowserViewAction::CopyScreenshot => self.copy_screenshot(ctx),
             BrowserViewAction::GoBack => self.navigate_active_tab(WebView::go_back),
             BrowserViewAction::GoForward => self.navigate_active_tab(WebView::go_forward),
             BrowserViewAction::Reload => self.navigate_active_tab(WebView::reload),

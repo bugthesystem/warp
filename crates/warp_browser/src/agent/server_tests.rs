@@ -68,6 +68,7 @@ async fn lists_the_browser_tools() {
             "browser_read",
             "browser_screenshot",
             "browser_console",
+            "browser_annotations",
             "browser_click",
             "browser_type",
         ]

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use warp_browser::agent::{self, BrowserCommand, ToolOutput, ToolRequest};
+use warp_browser::annotation::{PageAnnotation, format_annotations};
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
 use warpui::{Entity, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle};
 
@@ -60,6 +61,8 @@ pub struct BrowserAgent {
     approved_sites: ApprovedSites,
     approved_sites_path: Option<PathBuf>,
     pending: Vec<PendingApproval>,
+    /// Notes the user pinned to page elements that no agent has read yet.
+    annotations: Vec<PageAnnotation>,
 }
 
 /// A tool call waiting for the user to approve `site`.
@@ -87,12 +90,19 @@ impl BrowserAgent {
             approved_sites,
             approved_sites_path,
             pending: Vec::new(),
+            annotations: Vec::new(),
         }
     }
 
     /// The router serving the browser MCP endpoint.
     pub fn router(&self) -> axum::Router {
         agent::router(self.requests_tx.clone(), mcp_token())
+    }
+
+    /// Keeps a note for the next `browser_annotations` call.
+    pub fn add_annotation(&mut self, annotation: PageAnnotation, ctx: &mut ModelContext<Self>) {
+        self.annotations.push(annotation);
+        ctx.notify();
     }
 
     /// Whether agents may use any site without asking.
@@ -191,7 +201,7 @@ impl BrowserAgent {
         ctx: &mut ModelContext<Self>,
     ) -> Result<Approval, String> {
         let target_site = match &command {
-            BrowserCommand::ListTabs => None,
+            BrowserCommand::ListTabs | BrowserCommand::Annotations => None,
             BrowserCommand::Open { url } | BrowserCommand::Navigate { url, .. } => {
                 site_requiring_approval(&warp_browser::resolve_input(url))
             }
@@ -223,6 +233,7 @@ impl BrowserAgent {
                 )
             }
             command @ (BrowserCommand::ListTabs
+            | BrowserCommand::Annotations
             | BrowserCommand::Navigate { .. }
             | BrowserCommand::Read { .. }
             | BrowserCommand::Screenshot { .. }
@@ -247,6 +258,11 @@ impl BrowserAgent {
         };
 
         match command {
+            BrowserCommand::Annotations => {
+                let annotations = std::mem::take(&mut self.annotations);
+                ctx.notify();
+                reply(Ok(ToolOutput::Text(format_annotations(&annotations))));
+            }
             BrowserCommand::Open { url } => reply(
                 open_tab(Some(warp_browser::resolve_input(&url)), ctx).map(|(tab_id, _)| {
                     ToolOutput::Text(format!(
