@@ -1,4 +1,4 @@
-use super::resolve_input;
+use super::{is_local_address, resolve_input};
 
 #[test]
 fn urls_with_known_schemes_load_as_typed() {
@@ -75,4 +75,20 @@ fn everything_else_becomes_a_search() {
         resolve_input(".com"),
         "https://www.google.com/search?q=.com"
     );
+}
+
+#[test]
+fn local_addresses_are_recognized_with_or_without_a_scheme() {
+    assert!(is_local_address("http://localhost:5173/app"));
+    assert!(is_local_address("localhost:3000"));
+    assert!(is_local_address("http://127.0.0.1:8080"));
+    assert!(is_local_address("http://[::1]:8080/"));
+    assert!(is_local_address("http://app.localhost:4000"));
+}
+
+#[test]
+fn remote_addresses_and_searches_are_not_local() {
+    assert!(!is_local_address("https://warp.dev"));
+    assert!(!is_local_address("localhost.example.com"));
+    assert!(!is_local_address("run localhost"));
 }

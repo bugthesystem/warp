@@ -17,7 +17,7 @@ mod unsupported;
 pub use mac::{WebView, WebViewParent, window_parent};
 #[cfg(not(target_os = "macos"))]
 pub use unsupported::{WebView, WebViewParent, window_parent};
-pub use url_input::resolve_input;
+pub use url_input::{is_local_address, resolve_input};
 
 /// Whether web views can be embedded on the current platform.
 pub const fn is_supported() -> bool {
@@ -28,8 +28,14 @@ pub const fn is_supported() -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WebViewEvent {
     TitleChanged(String),
-    LoadStarted { url: String },
-    LoadFinished { url: String },
+    LoadStarted {
+        url: String,
+    },
+    LoadFinished {
+        url: String,
+    },
+    /// The user clicked in the page, which gave it keyboard focus.
+    PageFocused,
 }
 
 #[derive(Debug, thiserror::Error)]

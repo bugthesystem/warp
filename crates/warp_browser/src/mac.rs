@@ -18,6 +18,13 @@ use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
 use crate::{Error, WebViewEvent};
 
+/// Message the focus script posts when the user clicks in the page.
+const PAGE_FOCUSED_MESSAGE: &str = "warp:page-focused";
+
+/// Reports clicks in the page so Warp can move its own focus to the pane. The capture phase sees
+/// the click even when the page stops it from propagating.
+const FOCUS_SCRIPT: &str = r#"document.addEventListener("mousedown", () => window.ipc.postMessage("warp:page-focused"), true);"#;
+
 /// A native view of a Warp window that web views attach to.
 pub struct WebViewParent {
     view: Retained<NSView>,
@@ -55,6 +62,7 @@ impl WebView {
     ) -> Result<Self, Error> {
         let on_event: Rc<dyn Fn(WebViewEvent)> = Rc::new(on_event);
         let on_title_changed = on_event.clone();
+        let on_page_focused = on_event.clone();
         let on_page_load = on_event;
 
         let webview = WebViewBuilder::new()
@@ -62,6 +70,12 @@ impl WebView {
             .with_bounds(to_wry_rect(bounds))
             .with_devtools(cfg!(debug_assertions))
             .with_back_forward_navigation_gestures(true)
+            .with_initialization_script(FOCUS_SCRIPT)
+            .with_ipc_handler(move |request| {
+                if request.body() == PAGE_FOCUSED_MESSAGE {
+                    on_page_focused(WebViewEvent::PageFocused);
+                }
+            })
             .with_document_title_changed_handler(move |title| {
                 on_title_changed(WebViewEvent::TitleChanged(title));
             })

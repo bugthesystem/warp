@@ -19183,7 +19183,7 @@ impl TerminalView {
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.notify();
-                ctx.open_url(&uri);
+                Self::open_link_url(&uri, ctx);
             }
             GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
                 self.open_hyperlink_uri(uri, ctx);
@@ -19204,7 +19204,22 @@ impl TerminalView {
             return;
         }
         ctx.notify();
-        ctx.open_url(uri);
+        Self::open_link_url(uri, ctx);
+    }
+
+    /// Opens a link from terminal output. Local addresses, such as a dev server, open in a browser
+    /// pane when browser panes are enabled; everything else opens in the default browser.
+    pub(super) fn open_link_url(uri: &str, ctx: &mut ViewContext<Self>) {
+        if FeatureFlag::BrowserPane.is_enabled()
+            && warp_browser::is_supported()
+            && warp_browser::is_local_address(uri)
+        {
+            ctx.dispatch_typed_action(&WorkspaceAction::OpenBrowserPane {
+                url: Some(uri.to_owned()),
+            });
+        } else {
+            ctx.open_url(uri);
+        }
     }
 
     fn middle_click_on_grid(

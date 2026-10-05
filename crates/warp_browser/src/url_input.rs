@@ -32,6 +32,14 @@ pub fn resolve_input(input: &str) -> String {
     format!("{SEARCH_URL_PREFIX}{query}")
 }
 
+/// Whether `input`, typed or clicked, points at this machine, such as a local dev server.
+pub fn is_local_address(input: &str) -> bool {
+    url::Url::parse(&resolve_input(input))
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| is_local_host(&host))
+}
+
 /// Returns the host of a scheme-less address such as `example.com/path` or `localhost:3000`, or
 /// `None` if the input does not look like one.
 fn host_of(input: &str) -> Option<&str> {

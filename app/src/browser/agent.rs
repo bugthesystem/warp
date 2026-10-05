@@ -41,7 +41,7 @@ impl BrowserAgent {
             BrowserCommand::Navigate { tab, url } => {
                 reply(with_tab(tab, ctx).map(|(tab_id, view)| {
                     let url = warp_browser::resolve_input(&url);
-                    view.update(ctx, |view, ctx| view.load_url(url.clone(), ctx));
+                    view.update(ctx, |view, ctx| view.load_url(tab_id, url.clone(), ctx));
                     ToolOutput::Text(format!(
                         "Loading {url} in tab {tab_id}. Call browser_read once it loads."
                     ))
@@ -57,8 +57,8 @@ impl BrowserAgent {
                 })
             }
             BrowserCommand::Screenshot { tab } => match webview_tab(tab, ctx) {
-                Ok(view) => view.read(ctx, |view, _| {
-                    if let Some(webview) = view.webview() {
+                Ok((tab_id, view)) => view.read(ctx, |view, _| {
+                    if let Some(webview) = view.tab_webview(tab_id) {
                         webview.snapshot_png(move |png| {
                             reply(
                                 png.map(ToolOutput::Png)
@@ -101,24 +101,38 @@ impl Entity for BrowserAgent {
 
 impl SingletonEntity for BrowserAgent {}
 
+/// Opens `url` in a new tab of the current browser pane when it is in the active window, and in
+/// a new browser pane otherwise.
 fn open_tab(url: String, ctx: &mut ModelContext<BrowserAgent>) -> ToolResult {
-    let workspace = ctx
+    let window_id = ctx
         .windows()
         .active_window()
-        .and_then(|window_id| WorkspaceRegistry::as_ref(ctx).get(window_id, ctx))
         .ok_or_else(|| "No Warp window is open".to_owned())?;
     let url = warp_browser::resolve_input(&url);
-    workspace.update(ctx, |workspace, ctx| {
-        workspace.handle_action(
-            &WorkspaceAction::OpenBrowserPane {
-                url: Some(url.clone()),
-            },
-            ctx,
-        );
-    });
-    let tab_id = BrowserViewRegistry::as_ref(ctx)
-        .current_tab_id()
-        .ok_or_else(|| "The browser pane did not open".to_owned())?;
+
+    let current_view = BrowserViewRegistry::as_ref(ctx)
+        .resolve(None, ctx)
+        .map(|(_, view)| view)
+        .filter(|view| view.window_id(ctx) == window_id);
+    let tab_id = match current_view {
+        Some(view) => view.update(ctx, |view, ctx| view.open_tab(Some(url.clone()), ctx)),
+        None => {
+            let workspace = WorkspaceRegistry::as_ref(ctx)
+                .get(window_id, ctx)
+                .ok_or_else(|| "No Warp window is open".to_owned())?;
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.handle_action(
+                    &WorkspaceAction::OpenBrowserPane {
+                        url: Some(url.clone()),
+                    },
+                    ctx,
+                );
+            });
+            BrowserViewRegistry::as_ref(ctx)
+                .current_tab_id()
+                .ok_or_else(|| "The browser pane did not open".to_owned())?
+        }
+    };
     Ok(ToolOutput::Text(format!(
         "Opened {url} in tab {tab_id}. Call browser_read once it loads."
     )))
@@ -141,15 +155,15 @@ fn list_tabs(ctx: &ModelContext<BrowserAgent>) -> String {
             };
             format!(
                 "{tab_id}: {} - {}{marker}",
-                view.title().unwrap_or("Untitled"),
-                view.url()
+                view.tab_title(*tab_id).unwrap_or("Untitled"),
+                view.tab_url(*tab_id).unwrap_or_default()
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// Resolves `tab` and makes it the current tab.
+/// Resolves `tab` and brings it to the front of its pane, so the user sees what the agent does.
 fn with_tab(
     tab: Option<u64>,
     ctx: &mut ModelContext<BrowserAgent>,
@@ -160,7 +174,7 @@ fn with_tab(
             Some(tab_id) => format!("No browser tab {tab_id}. Call browser_tabs to list them."),
             None => "No browser tabs are open. Use browser_open to open one.".to_owned(),
         })?;
-    BrowserViewRegistry::handle(ctx).update(ctx, |registry, _| registry.set_current_tab(tab_id));
+    view.update(ctx, |view, ctx| view.select_tab(tab_id, ctx));
     Ok((tab_id, view))
 }
 
@@ -168,13 +182,13 @@ fn with_tab(
 fn webview_tab(
     tab: Option<u64>,
     ctx: &mut ModelContext<BrowserAgent>,
-) -> Result<ViewHandle<BrowserView>, String> {
+) -> Result<(u64, ViewHandle<BrowserView>), String> {
     let (tab_id, view) = with_tab(tab, ctx)?;
-    if view.as_ref(ctx).webview().is_some() {
-        Ok(view)
+    if view.as_ref(ctx).tab_webview(tab_id).is_some() {
+        Ok((tab_id, view))
     } else {
         Err(format!(
-            "Tab {tab_id} is not showing yet. Make sure its pane is visible and try again."
+            "Tab {tab_id} is not showing yet. It appears once its pane is visible; try again."
         ))
     }
 }
@@ -185,12 +199,12 @@ fn evaluate_in_tab(
     ctx: &mut ModelContext<BrowserAgent>,
     on_result: impl FnOnce(Result<String, String>) + Send + 'static,
 ) {
-    let view = match webview_tab(tab, ctx) {
-        Ok(view) => view,
+    let (tab_id, view) = match webview_tab(tab, ctx) {
+        Ok(tab) => tab,
         Err(message) => return on_result(Err(message)),
     };
     view.read(ctx, |view, _| {
-        let Some(webview) = view.webview() else {
+        let Some(webview) = view.tab_webview(tab_id) else {
             return;
         };
         let on_result = Arc::new(Mutex::new(Some(on_result)));
