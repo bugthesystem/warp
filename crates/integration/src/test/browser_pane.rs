@@ -6,7 +6,7 @@ use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for
 use warp::integration_testing::view_getters::{pane_group_view, workspace_view};
 use warp::pane_group::BrowserPane;
 use warp::workspace::WorkspaceAction;
-use warpui::{TypedActionView, async_assert};
+use warpui_core::{TypedActionView, async_assert};
 
 use crate::Builder;
 
