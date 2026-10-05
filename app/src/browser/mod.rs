@@ -3,6 +3,7 @@
 #[cfg(not(target_family = "wasm"))]
 mod agent;
 mod geometry;
+mod history;
 mod registry;
 mod view;
 
@@ -11,8 +12,9 @@ use warpui::{AppContext, View, id};
 
 #[cfg(not(target_family = "wasm"))]
 pub use agent::{BrowserAgent, claude_code_setup_command, mcp_token, mcp_url};
+pub use history::BrowserHistoryModel;
 pub use registry::{BrowserViewRegistry, sync_webviews};
-pub use view::{BrowserView, BrowserViewAction, BrowserViewEvent};
+pub use view::{AgentApproval, BrowserView, BrowserViewAction, BrowserViewEvent};
 
 pub fn init(app: &mut AppContext) {
     let context = id!(BrowserView::ui_name());

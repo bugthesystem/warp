@@ -48,6 +48,20 @@ pub struct ToolRequest {
 }
 
 impl BrowserCommand {
+    /// The tab the command acts on, where it acts on an existing tab. `None` means the current
+    /// tab for those commands.
+    pub fn tab(&self) -> Option<u64> {
+        match self {
+            Self::Navigate { tab, .. }
+            | Self::Read { tab }
+            | Self::Screenshot { tab }
+            | Self::Console { tab, .. }
+            | Self::Click { tab, .. }
+            | Self::Type { tab, .. } => *tab,
+            Self::Open { .. } | Self::ListTabs => None,
+        }
+    }
+
     /// Parses an MCP tool call. The error is a message for the agent.
     pub fn from_tool_call(name: &str, args: &Map<String, Value>) -> Result<Self, String> {
         let tab = optional_u64(args, "tab")?;

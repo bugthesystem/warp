@@ -1,20 +1,23 @@
 use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::vec2f;
 use warp_browser::{WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warpui::elements::{
-    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
-    Shrinkable, Text,
+    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Shrinkable, Stack, Text,
 };
+use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, BlurContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId,
 };
 
-use super::BrowserViewRegistry;
 use super::geometry::webview_bounds;
+use super::{BrowserHistoryModel, BrowserViewRegistry};
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::PaneHeaderAction;
@@ -28,7 +31,10 @@ use crate::ui_components::icons::Icon;
 /// Title shown for a tab until its page reports one.
 const DEFAULT_TITLE: &str = "Browser";
 
-const DEFAULT_URL: &str = "https://www.google.com";
+const NEW_TAB_TITLE: &str = "New Tab";
+
+/// Most recent sites listed on the new-tab page.
+const MAX_RECENTS: usize = 8;
 
 const URL_FIELD_PLACEHOLDER: &str = "Search or enter URL";
 
@@ -41,6 +47,8 @@ const TAB_ICON_SIZE: f32 = 14.;
 const STATUS_ICON_SIZE: f32 = 16.;
 
 const CORNER_RADIUS: f32 = 6.;
+
+const NEW_TAB_PAGE_WIDTH: f32 = 560.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
@@ -57,6 +65,17 @@ pub enum BrowserViewAction {
     CloseTab(u64),
     CloseActiveTab,
     FocusUrlField,
+    OpenUrl(String),
+    ResolveAgentApproval(AgentApproval),
+    ToggleAgentAutoApprove,
+}
+
+/// The user's answer when an agent asks to use a site that is not local.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentApproval {
+    Once,
+    Always,
+    Deny,
 }
 
 /// Header clicks reach the view as custom pane header actions, since the header is not one of the
@@ -82,13 +101,24 @@ pub struct BrowserView {
     new_tab_button: MouseStateHandle,
     /// Whether the active page, rather than Warp, has keyboard focus.
     page_focused: bool,
+    /// A site an agent is waiting for the user to approve.
+    agent_approval_site: Option<String>,
+    approve_once_button: MouseStateHandle,
+    approve_always_button: MouseStateHandle,
+    deny_button: MouseStateHandle,
+    auto_approve_button: MouseStateHandle,
+    /// One per row the new-tab page can show, across its sections.
+    recent_buttons: Vec<MouseStateHandle>,
     events_tx: async_channel::Sender<(u64, WebViewEvent)>,
 }
 
 /// One page in a browser pane. Agents address tabs by `id`.
 struct BrowserTab {
     id: u64,
+    /// Empty while the tab shows the new-tab page.
     url: String,
+    /// Whether an agent opened or navigated the tab, which history records with its visits.
+    agent_driven: bool,
     title: Option<String>,
     is_loading: bool,
     can_go_back: bool,
@@ -145,9 +175,19 @@ impl BrowserView {
             reload_button: MouseStateHandle::default(),
             new_tab_button: MouseStateHandle::default(),
             page_focused: false,
+            agent_approval_site: None,
+            approve_once_button: MouseStateHandle::default(),
+            approve_always_button: MouseStateHandle::default(),
+            deny_button: MouseStateHandle::default(),
+            auto_approve_button: MouseStateHandle::default(),
+            recent_buttons: (0..MAX_RECENTS * 3)
+                .map(|_| MouseStateHandle::default())
+                .collect(),
             events_tx,
         };
-        view.open_tab(url, ctx);
+        #[cfg(not(target_family = "wasm"))]
+        ctx.observe(&super::BrowserAgent::handle(ctx), |_, _, ctx| ctx.notify());
+        view.open_tab(url, false, ctx);
         view
     }
 
@@ -157,6 +197,10 @@ impl BrowserView {
 
     /// Focuses the page when it has been shown, and the URL field otherwise.
     pub fn focus(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.active().url.is_empty() {
+            ctx.focus(&self.url_editor);
+            return;
+        }
         match &self.active().webview {
             Some(placed) => {
                 ctx.focus_self();
@@ -205,12 +249,29 @@ impl BrowserView {
             .map(|placed| &placed.webview)
     }
 
-    /// Opens a tab showing `url`, or a default page, and makes it active. Returns its id.
-    pub fn open_tab(&mut self, url: Option<String>, ctx: &mut ViewContext<Self>) -> u64 {
+    /// Asks the user, in this pane, whether an agent may use `site`.
+    pub fn request_agent_approval(&mut self, site: String, ctx: &mut ViewContext<Self>) {
+        self.agent_approval_site = Some(site);
+        ctx.notify();
+    }
+
+    pub fn clear_agent_approval(&mut self, ctx: &mut ViewContext<Self>) {
+        self.agent_approval_site = None;
+        ctx.notify();
+    }
+
+    /// Opens a tab showing `url`, or the new-tab page, and makes it active. Returns its id.
+    pub fn open_tab(
+        &mut self,
+        url: Option<String>,
+        agent_driven: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> u64 {
         let id = BrowserViewRegistry::handle(ctx).update(ctx, |registry, _| registry.new_tab_id());
         self.tabs.push(BrowserTab {
             id,
-            url: url.unwrap_or_else(|| DEFAULT_URL.to_owned()),
+            url: url.unwrap_or_default(),
+            agent_driven,
             title: None,
             is_loading: false,
             can_go_back: false,
@@ -229,8 +290,21 @@ impl BrowserView {
         }
     }
 
-    /// Loads `url` in the given tab.
-    pub fn load_url(&mut self, tab_id: u64, url: String, ctx: &mut ViewContext<Self>) {
+    /// Records that an agent drives the tab, so its visits are listed as opened by agents.
+    pub fn mark_agent_driven(&mut self, tab_id: u64) {
+        if let Some(index) = self.tab_index(tab_id) {
+            self.tabs[index].agent_driven = true;
+        }
+    }
+
+    /// Loads `url` in the given tab, at the request of an agent when `by_agent` is set.
+    pub fn load_url(
+        &mut self,
+        tab_id: u64,
+        url: String,
+        by_agent: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let Some(index) = self.tab_index(tab_id) else {
             return;
         };
@@ -242,6 +316,7 @@ impl BrowserView {
             return;
         }
         tab.url = url;
+        tab.agent_driven = by_agent;
         self.sync_chrome(ctx);
     }
 
@@ -296,10 +371,7 @@ impl BrowserView {
     /// Updates the URL field and pane title from the active tab.
     fn sync_chrome(&mut self, ctx: &mut ViewContext<Self>) {
         let active = self.active();
-        let title = active
-            .title
-            .clone()
-            .unwrap_or_else(|| DEFAULT_TITLE.to_owned());
+        let title = tab_title(active);
         self.pane_configuration.update(ctx, |configuration, ctx| {
             configuration.set_title(title, ctx)
         });
@@ -327,7 +399,7 @@ impl BrowserView {
             EditorEvent::Enter => {
                 let input = self.url_editor.as_ref(ctx).buffer_text(ctx);
                 let tab_id = self.active().id;
-                self.load_url(tab_id, warp_browser::resolve_input(&input), ctx);
+                self.load_url(tab_id, warp_browser::resolve_input(&input), false, ctx);
             }
             EditorEvent::Escape => self.show_url(ctx),
             EditorEvent::Focused => {
@@ -360,6 +432,9 @@ impl BrowserView {
         let tab = &mut self.tabs[index];
         match event {
             WebViewEvent::TitleChanged(title) => {
+                let url = tab.url.clone();
+                BrowserHistoryModel::handle(ctx)
+                    .update(ctx, |history, ctx| history.set_title(&url, &title, ctx));
                 tab.title = (!title.is_empty()).then_some(title);
             }
             WebViewEvent::LoadStarted { url } => {
@@ -368,6 +443,10 @@ impl BrowserView {
             }
             WebViewEvent::LoadFinished { url } => {
                 tab.is_loading = false;
+                let opened_by_agent = tab.agent_driven;
+                BrowserHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.record_visit(&url, opened_by_agent, ctx)
+                });
                 tab.url = url;
                 if let Some(placed) = &tab.webview {
                     tab.can_go_back = placed.webview.can_go_back().unwrap_or(false);
@@ -503,10 +582,7 @@ impl BrowserView {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let tab_id = tab.id;
-        let title = tab
-            .title
-            .clone()
-            .unwrap_or_else(|| warp_browser::display_url(&tab.url));
+        let title = tab_title(tab);
         let text_color = if is_active {
             theme.active_ui_text_color()
         } else {
@@ -571,7 +647,132 @@ impl BrowserView {
         .finish()
     }
 
-    fn render_toolbar(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Shown in place of a page while a tab has no URL: local apps, pages agents opened, and other
+    /// recent pages.
+    fn render_new_tab_page(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let sections = BrowserHistoryModel::as_ref(app).sections(MAX_RECENTS);
+        let mut mouse_states = self.recent_buttons.iter();
+
+        let mut column = Flex::column().with_spacing(2.);
+        let groups = [
+            (Icon::Laptop, "Local apps", &sections.local_apps),
+            (
+                Icon::AgentMode,
+                "Opened by agents",
+                &sections.opened_by_agents,
+            ),
+            (Icon::Clock, "Recent", &sections.recent),
+        ];
+        let mut is_empty = true;
+        for (icon, heading, entries) in groups {
+            if entries.is_empty() {
+                continue;
+            }
+            is_empty = false;
+            column.add_child(
+                Container::new(section_heading(icon, heading, appearance))
+                    .with_margin_top(14.)
+                    .with_margin_bottom(4.)
+                    .finish(),
+            );
+            for (entry, mouse_state) in entries.iter().zip(mouse_states.by_ref()) {
+                column.add_child(history_row(
+                    &entry.url,
+                    entry.title.as_deref(),
+                    icon,
+                    mouse_state,
+                    appearance,
+                ));
+            }
+        }
+        if is_empty {
+            column.add_child(
+                Text::new_inline(
+                    "Pages you and your agents visit appear here. Type a URL or search above.",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.nonactive_ui_text_color().into())
+                .finish(),
+            );
+        }
+
+        Align::new(
+            Container::new(
+                ConstrainedBox::new(column.finish())
+                    .with_max_width(NEW_TAB_PAGE_WIDTH)
+                    .finish(),
+            )
+            .with_margin_top(32.)
+            .with_horizontal_padding(16.)
+            .finish(),
+        )
+        .top_center()
+        .finish()
+    }
+
+    /// The prompt asking whether an agent may use a site that is not local.
+    fn render_agent_approval(&self, site: &str, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let button = |variant, label: &str, mouse_state: &MouseStateHandle, decision| {
+            appearance
+                .ui_builder()
+                .button(variant, mouse_state.clone())
+                .with_centered_text_label(label.to_owned())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(BrowserViewAction::ResolveAgentApproval(decision))
+                })
+                .finish()
+        };
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.)
+                .with_child(
+                    Shrinkable::new(
+                        1.,
+                        Text::new_inline(
+                            format!("Allow the agent to use {site}?"),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(button(
+                    ButtonVariant::Secondary,
+                    "Deny",
+                    &self.deny_button,
+                    AgentApproval::Deny,
+                ))
+                .with_child(button(
+                    ButtonVariant::Secondary,
+                    "Allow once",
+                    &self.approve_once_button,
+                    AgentApproval::Once,
+                ))
+                .with_child(button(
+                    ButtonVariant::Accent,
+                    "Always allow",
+                    &self.approve_always_button,
+                    AgentApproval::Always,
+                ))
+                .finish(),
+        )
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(8.)
+        .with_background(theme.surface_2())
+        .with_border(Border::bottom(1.).with_border_fill(theme.outline()))
+        .finish()
+    }
+
+    fn render_toolbar(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
         let active = self.active();
         let url_field = appearance
             .ui_builder()
@@ -631,12 +832,187 @@ impl BrowserView {
                 .finish(),
             )
             .with_child(Expanded::new(1., url_field).finish())
+            .with_child(self.render_auto_approve_switch(appearance, app))
             .finish()
     }
+
+    /// Shows whether agents ask before using sites that are not local, and switches between
+    /// asking and approving automatically.
+    fn render_auto_approve_switch(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        #[cfg(not(target_family = "wasm"))]
+        let auto_approve = super::BrowserAgent::as_ref(app).auto_approve();
+        #[cfg(target_family = "wasm")]
+        let auto_approve = {
+            let _ = app;
+            false
+        };
+        let theme = appearance.theme();
+        let (label, tooltip) = if auto_approve {
+            (
+                "Agent: Auto",
+                "Agents use any site without asking. Click to ask first.",
+            )
+        } else {
+            (
+                "Agent: Ask",
+                "Agents ask before using sites that are not local. Click to approve automatically.",
+            )
+        };
+        let (text_color, background, border) = if auto_approve {
+            (
+                theme.accent(),
+                theme.accent().with_opacity(15),
+                theme.accent(),
+            )
+        } else {
+            (
+                theme.nonactive_ui_text_color(),
+                theme.surface_2(),
+                theme.outline(),
+            )
+        };
+        let ui_builder = appearance.ui_builder().clone();
+        let font_family = appearance.ui_font_family();
+        let font_size = appearance.ui_font_size();
+        Hoverable::new(self.auto_approve_button.clone(), move |state| {
+            let pill = Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(6.)
+                    .with_child(
+                        ConstrainedBox::new(Icon::AgentMode.to_warpui_icon(text_color).finish())
+                            .with_width(TAB_ICON_SIZE)
+                            .with_height(TAB_ICON_SIZE)
+                            .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(label, font_family, font_size)
+                            .with_color(text_color.into())
+                            .finish(),
+                    )
+                    .finish(),
+            )
+            .with_horizontal_padding(10.)
+            .with_vertical_padding(4.)
+            .with_background(background)
+            .with_border(Border::all(1.).with_border_fill(border))
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
+            if state.is_hovered() {
+                let mut stack = Stack::new().with_child(pill.finish());
+                stack.add_positioned_overlay_child(
+                    ui_builder.tool_tip(tooltip.to_owned()).build().finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomRight,
+                        ChildAnchor::TopRight,
+                    ),
+                );
+                stack.finish()
+            } else {
+                pill.finish()
+            }
+        })
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::ToggleAgentAutoApprove))
+        .finish()
+    }
+}
+
+fn section_heading(icon: Icon, heading: &str, appearance: &Appearance) -> Box<dyn Element> {
+    let color = appearance.theme().nonactive_ui_text_color();
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(6.)
+        .with_child(
+            ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+                .with_width(TAB_ICON_SIZE)
+                .with_height(TAB_ICON_SIZE)
+                .finish(),
+        )
+        .with_child(
+            Text::new_inline(
+                heading.to_owned(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(color.into())
+            .finish(),
+        )
+        .finish()
+}
+
+/// A clickable page on the new-tab page.
+fn history_row(
+    url: &str,
+    title: Option<&str>,
+    icon: Icon,
+    mouse_state: &MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let font_family = appearance.ui_font_family();
+    let font_size = appearance.ui_font_size();
+    let short_url = warp_browser::display_url(url);
+    let title = title.map_or_else(|| short_url.clone(), str::to_owned);
+    let url = url.to_owned();
+    Hoverable::new(mouse_state.clone(), move |state| {
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(10.)
+            .with_child(
+                ConstrainedBox::new(
+                    icon.to_warpui_icon(theme.nonactive_ui_text_color())
+                        .finish(),
+                )
+                .with_width(TAB_ICON_SIZE)
+                .with_height(TAB_ICON_SIZE)
+                .finish(),
+            )
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(title, font_family, font_size)
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                )
+                .finish(),
+            )
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    Text::new_inline(short_url, font_family, font_size)
+                        .with_color(theme.nonactive_ui_text_color().into())
+                        .finish(),
+                )
+                .finish(),
+            );
+        let mut container = Container::new(row.finish())
+            .with_horizontal_padding(10.)
+            .with_vertical_padding(6.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS)));
+        if state.is_hovered() {
+            container = container.with_background(theme.surface_2());
+        }
+        container.finish()
+    })
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::OpenUrl(url.clone())))
+    .finish()
 }
 
 /// Whether a menu, modal or other overlay drew over `rect` in the last frame. The web view sits
 /// above everything WarpUI draws, so it has to be hidden for the overlay to show.
+fn tab_title(tab: &BrowserTab) -> String {
+    match &tab.title {
+        Some(title) => title.clone(),
+        None if tab.url.is_empty() => NEW_TAB_TITLE.to_owned(),
+        None => warp_browser::display_url(&tab.url),
+    }
+}
+
 fn is_overlaid(window_id: WindowId, rect: RectF, ctx: &AppContext) -> bool {
     ctx.presenter(window_id).is_some_and(|presenter| {
         presenter
@@ -750,17 +1126,24 @@ impl View for BrowserView {
         let appearance = Appearance::as_ref(app);
         // Saved for a single frame so the position is absent whenever the pane is not drawn,
         // which is what hides the web view.
-        let content_area = SavePosition::new(Empty::new().finish(), &self.content_position_id)
-            .for_single_frame()
-            .finish();
+        let content_area = if self.active().url.is_empty() {
+            self.render_new_tab_page(app)
+        } else {
+            SavePosition::new(Empty::new().finish(), &self.content_position_id)
+                .for_single_frame()
+                .finish()
+        };
 
-        Flex::column()
-            .with_child(
-                Container::new(self.render_toolbar(appearance))
-                    .with_uniform_padding(TOOLBAR_PADDING)
-                    .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
-                    .finish(),
-            )
+        let mut column = Flex::column().with_child(
+            Container::new(self.render_toolbar(app))
+                .with_uniform_padding(TOOLBAR_PADDING)
+                .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
+                .finish(),
+        );
+        if let Some(site) = &self.agent_approval_site {
+            column.add_child(self.render_agent_approval(site, appearance));
+        }
+        column
             .with_child(Expanded::new(1., content_area).finish())
             .finish()
     }
@@ -772,7 +1155,7 @@ impl TypedActionView for BrowserView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             BrowserViewAction::NewTab => {
-                self.open_tab(None, ctx);
+                self.open_tab(None, false, ctx);
                 ctx.focus(&self.url_editor);
             }
             BrowserViewAction::SelectTab(tab_id) => self.select_tab(*tab_id, ctx),
@@ -782,6 +1165,27 @@ impl TypedActionView for BrowserView {
                 self.close_tab(tab_id, ctx);
             }
             BrowserViewAction::FocusUrlField => ctx.focus(&self.url_editor),
+            BrowserViewAction::OpenUrl(url) => {
+                let tab_id = self.active().id;
+                self.load_url(tab_id, url.clone(), false, ctx);
+            }
+            BrowserViewAction::ResolveAgentApproval(decision) => {
+                let Some(site) = self.agent_approval_site.take() else {
+                    return;
+                };
+                ctx.notify();
+                #[cfg(not(target_family = "wasm"))]
+                super::BrowserAgent::handle(ctx).update(ctx, |agent, ctx| {
+                    agent.resolve_approval(&site, *decision, ctx)
+                });
+                #[cfg(target_family = "wasm")]
+                let _ = (site, decision);
+            }
+            BrowserViewAction::ToggleAgentAutoApprove => {
+                #[cfg(not(target_family = "wasm"))]
+                super::BrowserAgent::handle(ctx)
+                    .update(ctx, |agent, ctx| agent.toggle_auto_approve(ctx));
+            }
             BrowserViewAction::GoBack => self.navigate_active_tab(WebView::go_back),
             BrowserViewAction::GoForward => self.navigate_active_tab(WebView::go_forward),
             BrowserViewAction::Reload => self.navigate_active_tab(WebView::reload),

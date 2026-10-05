@@ -82,7 +82,7 @@ fn host_of(input: &str) -> Option<&str> {
     is_host_like.then_some(host)
 }
 
-fn is_local_host(host: &str) -> bool {
+pub(crate) fn is_local_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]") || host.ends_with(".localhost")
 }
 

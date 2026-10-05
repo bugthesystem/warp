@@ -21,8 +21,9 @@ use super::{BrowserCommand, ToolOutput, ToolRequest};
 /// Path of the browser MCP endpoint on Warp's local HTTP server.
 pub const MCP_PATH: &str = "/mcp/browser";
 
-/// How long a tool call may wait for the page before the agent gets an error.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a tool call may wait before the agent gets an error. Calls on sites that are not local
+/// wait for the user to approve the site, so this allows time for them to notice the prompt.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
 const SERVER_INSTRUCTIONS: &str = "Controls the browser panes in Warp. Call browser_read to see a \
 page's text and its numbered interactive elements, then act on an element by its number with \
@@ -82,7 +83,7 @@ impl BrowserMcpServer {
         match tokio::time::timeout(TOOL_TIMEOUT, response).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("The browser pane closed before responding".to_owned()),
-            Err(_) => Err("Timed out waiting for the page".to_owned()),
+            Err(_) => Err("Timed out waiting for the page or for the user's approval".to_owned()),
         }
     }
 }

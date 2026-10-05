@@ -884,6 +884,9 @@ pub enum WorkspaceAction {
     },
     /// Copies a command that connects Claude Code to the browser pane's agent tools.
     CopyBrowserAgentSetup,
+    /// Switches between agents asking before using sites that are not local in browser panes,
+    /// and approving them automatically.
+    ToggleBrowserAgentAutoApprove,
     /// Opens or focuses a window scoped to the specified team.
     OpenNewWindowForTeam {
         team_uid: ServerId,
@@ -1219,6 +1222,7 @@ impl WorkspaceAction {
             | OpenNetworkLogPane
             | OpenBrowserPane { .. }
             | CopyBrowserAgentSetup
+            | ToggleBrowserAgentAutoApprove
             | OpenNewWindowForTeam { .. }
             | BrowseTeams
             | ShowTeamSwitcherMenu => false,

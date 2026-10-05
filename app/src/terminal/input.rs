@@ -2174,6 +2174,13 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 
     app.register_editable_bindings([EditableBinding::new(
+        "workspace:toggle_browser_agent_auto_approve",
+        "Toggle browser agent auto-approve",
+        WorkspaceAction::ToggleBrowserAgentAutoApprove,
+    )
+    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+
+    app.register_editable_bindings([EditableBinding::new(
         "input:clear_screen",
         "Clear screen",
         InputAction::ClearScreen,

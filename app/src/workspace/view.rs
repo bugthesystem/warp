@@ -24565,6 +24565,13 @@ impl TypedActionView for Workspace {
             }
             #[cfg(target_family = "wasm")]
             CopyBrowserAgentSetup => {}
+            #[cfg(not(target_family = "wasm"))]
+            ToggleBrowserAgentAutoApprove => {
+                crate::browser::BrowserAgent::handle(ctx)
+                    .update(ctx, |agent, ctx| agent.toggle_auto_approve(ctx));
+            }
+            #[cfg(target_family = "wasm")]
+            ToggleBrowserAgentAutoApprove => {}
             FixSettingsWithOz { error_description } => {
                 use crate::ai::skills::SkillManager;
                 let modify_settings_skill = SkillManager::as_ref(ctx)

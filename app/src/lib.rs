@@ -1872,6 +1872,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
     ctx.add_singleton_model(|_| NetworkLogPaneManager::default());
     ctx.add_singleton_model(|_| browser::BrowserViewRegistry::default());
+    ctx.add_singleton_model(|_| browser::BrowserHistoryModel::new());
     #[cfg(not(target_family = "wasm"))]
     ctx.add_singleton_model(browser::BrowserAgent::new);
     ctx.on_frame_drawn(|ctx, window_id| browser::sync_webviews(window_id, ctx));

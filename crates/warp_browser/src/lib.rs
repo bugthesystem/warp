@@ -6,6 +6,8 @@
 
 #[cfg(not(target_family = "wasm"))]
 pub mod agent;
+pub mod history;
+pub mod sites;
 mod url_input;
 
 #[cfg(target_os = "macos")]

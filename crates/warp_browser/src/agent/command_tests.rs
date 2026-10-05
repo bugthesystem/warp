@@ -95,3 +95,17 @@ fn console_does_not_clear_by_default() {
         })
     );
 }
+
+#[test]
+fn tab_is_reported_for_commands_that_act_on_a_tab() {
+    let click = BrowserCommand::Click {
+        tab: Some(3),
+        element: 1,
+    };
+    let open = BrowserCommand::Open {
+        url: "warp.dev".to_owned(),
+    };
+
+    assert_eq!(click.tab(), Some(3));
+    assert_eq!(open.tab(), None);
+}

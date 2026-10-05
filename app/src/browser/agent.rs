@@ -1,14 +1,16 @@
 //! Runs agents' browser tool calls against browser panes. Calls arrive from the browser MCP
 //! endpoint on Warp's local HTTP server.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Deserialize;
 use warp_browser::agent::{self, BrowserCommand, ToolOutput, ToolRequest};
-use warpui::{Entity, ModelContext, SingletonEntity, TypedActionView, ViewHandle};
+use warp_browser::sites::{ApprovedSites, site_requiring_approval};
+use warpui::{Entity, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle};
 
-use super::{BrowserView, BrowserViewRegistry};
+use super::{AgentApproval, BrowserView, BrowserViewRegistry};
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 type ToolResult = Result<ToolOutput, String>;
@@ -49,15 +51,43 @@ pub fn claude_code_setup_command() -> String {
     )
 }
 
+const APPROVED_SITES_FILE_NAME: &str = "browser-agent-sites.json";
+
+/// Runs agents' browser tool calls on the main thread. Calls that act on, or open, a site that is
+/// not local wait until the user approves the site in the browser pane.
 pub struct BrowserAgent {
     requests_tx: async_channel::Sender<ToolRequest>,
+    approved_sites: ApprovedSites,
+    approved_sites_path: Option<PathBuf>,
+    pending: Vec<PendingApproval>,
 }
+
+/// A tool call waiting for the user to approve `site`.
+struct PendingApproval {
+    site: String,
+    view: WeakViewHandle<BrowserView>,
+    command: BrowserCommand,
+    reply: Reply,
+}
+
+type Reply = tokio::sync::oneshot::Sender<ToolResult>;
 
 impl BrowserAgent {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (requests_tx, requests_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(requests_rx, Self::handle_request, |_, _| {});
-        Self { requests_tx }
+        let approved_sites_path =
+            warp_core::paths::warp_home_config_dir().map(|dir| dir.join(APPROVED_SITES_FILE_NAME));
+        let approved_sites = approved_sites_path
+            .as_deref()
+            .map(ApprovedSites::load)
+            .unwrap_or_default();
+        Self {
+            requests_tx,
+            approved_sites,
+            approved_sites_path,
+            pending: Vec::new(),
+        }
     }
 
     /// The router serving the browser MCP endpoint.
@@ -65,20 +95,172 @@ impl BrowserAgent {
         agent::router(self.requests_tx.clone(), mcp_token())
     }
 
+    /// Whether agents may use any site without asking.
+    pub fn auto_approve(&self) -> bool {
+        self.approved_sites.auto_approve()
+    }
+
+    /// Turns auto-approval on or off. Turning it on lets every waiting call go ahead.
+    pub fn toggle_auto_approve(&mut self, ctx: &mut ModelContext<Self>) {
+        let auto_approve = !self.approved_sites.auto_approve();
+        self.approved_sites.set_auto_approve(auto_approve);
+        self.save_approved_sites();
+        if auto_approve {
+            let sites: Vec<String> = self
+                .pending
+                .iter()
+                .map(|pending| pending.site.clone())
+                .collect();
+            for site in sites {
+                self.resolve_approval(&site, AgentApproval::Once, ctx);
+            }
+        }
+        ctx.notify();
+    }
+
+    fn save_approved_sites(&self) {
+        if let Some(path) = &self.approved_sites_path
+            && let Err(err) = self.approved_sites.save(path)
+        {
+            log::warn!("Failed to save sites approved for the browser agent: {err:#}");
+        }
+    }
+
+    /// Applies the user's decision for `site` to every call waiting on it.
+    pub fn resolve_approval(
+        &mut self,
+        site: &str,
+        decision: AgentApproval,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if decision == AgentApproval::Always {
+            self.approved_sites.approve(site.to_owned());
+            self.save_approved_sites();
+        }
+        let (resolved, pending) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition::<Vec<_>, _>(|pending| pending.site == site);
+        self.pending = pending;
+        for pending in resolved {
+            if let Some(view) = pending.view.upgrade(ctx) {
+                view.update(ctx, |view, ctx| view.clear_agent_approval(ctx));
+            }
+            match decision {
+                AgentApproval::Once | AgentApproval::Always => {
+                    self.execute(pending.command, pending.reply, ctx)
+                }
+                AgentApproval::Deny => {
+                    let _ = pending.reply.send(Err(format!(
+                        "The user did not allow the agent to use {site}."
+                    )));
+                }
+            }
+        }
+    }
+
     fn handle_request(&mut self, request: ToolRequest, ctx: &mut ModelContext<Self>) {
         let ToolRequest { command, reply } = request;
+        match self.approval_needed(command, ctx) {
+            Ok(Approval::NotNeeded(command)) => self.execute(command, reply, ctx),
+            Ok(Approval::Needed {
+                site,
+                view,
+                command,
+            }) => {
+                view.update(ctx, |view, ctx| {
+                    view.request_agent_approval(site.clone(), ctx)
+                });
+                self.pending.push(PendingApproval {
+                    site,
+                    view: view.downgrade(),
+                    command,
+                    reply,
+                });
+            }
+            Err(message) => {
+                let _ = reply.send(Err(message));
+            }
+        }
+    }
+
+    /// Works out whether `command` needs the user's approval for a site. A call that opens a
+    /// site becomes a navigation of a new, empty tab, so the approval prompt has a place to show.
+    fn approval_needed(
+        &self,
+        command: BrowserCommand,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<Approval, String> {
+        let target_site = match &command {
+            BrowserCommand::ListTabs => None,
+            BrowserCommand::Open { url } | BrowserCommand::Navigate { url, .. } => {
+                site_requiring_approval(&warp_browser::resolve_input(url))
+            }
+            BrowserCommand::Read { .. }
+            | BrowserCommand::Screenshot { .. }
+            | BrowserCommand::Console { .. }
+            | BrowserCommand::Click { .. }
+            | BrowserCommand::Type { .. } => BrowserViewRegistry::as_ref(ctx)
+                .resolve(command.tab(), ctx)
+                .and_then(|(tab_id, view)| {
+                    view.as_ref(ctx)
+                        .tab_url(tab_id)
+                        .and_then(site_requiring_approval)
+                }),
+        };
+        let Some(site) = target_site.filter(|site| !self.approved_sites.allows(site)) else {
+            return Ok(Approval::NotNeeded(command));
+        };
+
+        let (command, view) = match command {
+            BrowserCommand::Open { url } => {
+                let (tab_id, view) = open_tab(None, ctx)?;
+                (
+                    BrowserCommand::Navigate {
+                        tab: Some(tab_id),
+                        url,
+                    },
+                    view,
+                )
+            }
+            command @ (BrowserCommand::ListTabs
+            | BrowserCommand::Navigate { .. }
+            | BrowserCommand::Read { .. }
+            | BrowserCommand::Screenshot { .. }
+            | BrowserCommand::Console { .. }
+            | BrowserCommand::Click { .. }
+            | BrowserCommand::Type { .. }) => {
+                let (_, view) = with_tab(command.tab(), ctx)?;
+                (command, view)
+            }
+        };
+        Ok(Approval::Needed {
+            site,
+            view,
+            command,
+        })
+    }
+
+    fn execute(&mut self, command: BrowserCommand, reply: Reply, ctx: &mut ModelContext<Self>) {
         let reply = move |result: ToolResult| {
             // The agent stops waiting after a timeout, which drops the receiver.
             let _ = reply.send(result);
         };
 
         match command {
-            BrowserCommand::Open { url } => reply(open_tab(url, ctx)),
+            BrowserCommand::Open { url } => reply(
+                open_tab(Some(warp_browser::resolve_input(&url)), ctx).map(|(tab_id, _)| {
+                    ToolOutput::Text(format!(
+                        "Opened {url} in tab {tab_id}. Call browser_read once it loads."
+                    ))
+                }),
+            ),
             BrowserCommand::ListTabs => reply(Ok(ToolOutput::Text(list_tabs(ctx)))),
             BrowserCommand::Navigate { tab, url } => {
                 reply(with_tab(tab, ctx).map(|(tab_id, view)| {
                     let url = warp_browser::resolve_input(&url);
-                    view.update(ctx, |view, ctx| view.load_url(tab_id, url.clone(), ctx));
+                    view.update(ctx, |view, ctx| {
+                        view.load_url(tab_id, url.clone(), true, ctx)
+                    });
                     ToolOutput::Text(format!(
                         "Loading {url} in tab {tab_id}. Call browser_read once it loads."
                     ))
@@ -149,41 +331,46 @@ impl Entity for BrowserAgent {
 
 impl SingletonEntity for BrowserAgent {}
 
-/// Opens `url` in a new tab of the current browser pane when it is in the active window, and in
-/// a new browser pane otherwise.
-fn open_tab(url: String, ctx: &mut ModelContext<BrowserAgent>) -> ToolResult {
+enum Approval {
+    NotNeeded(BrowserCommand),
+    Needed {
+        site: String,
+        view: ViewHandle<BrowserView>,
+        command: BrowserCommand,
+    },
+}
+
+/// Opens a tab showing `url`, or the new-tab page, in the current browser pane when it is in the
+/// active window, and in a new browser pane otherwise.
+fn open_tab(
+    url: Option<String>,
+    ctx: &mut ModelContext<BrowserAgent>,
+) -> Result<(u64, ViewHandle<BrowserView>), String> {
     let window_id = ctx
         .windows()
         .active_window()
         .ok_or_else(|| "No Warp window is open".to_owned())?;
-    let url = warp_browser::resolve_input(&url);
 
     let current_view = BrowserViewRegistry::as_ref(ctx)
         .resolve(None, ctx)
         .map(|(_, view)| view)
         .filter(|view| view.window_id(ctx) == window_id);
-    let tab_id = match current_view {
-        Some(view) => view.update(ctx, |view, ctx| view.open_tab(Some(url.clone()), ctx)),
-        None => {
-            let workspace = WorkspaceRegistry::as_ref(ctx)
-                .get(window_id, ctx)
-                .ok_or_else(|| "No Warp window is open".to_owned())?;
-            workspace.update(ctx, |workspace, ctx| {
-                workspace.handle_action(
-                    &WorkspaceAction::OpenBrowserPane {
-                        url: Some(url.clone()),
-                    },
-                    ctx,
-                );
-            });
-            BrowserViewRegistry::as_ref(ctx)
-                .current_tab_id()
-                .ok_or_else(|| "The browser pane did not open".to_owned())?
-        }
-    };
-    Ok(ToolOutput::Text(format!(
-        "Opened {url} in tab {tab_id}. Call browser_read once it loads."
-    )))
+    if let Some(view) = current_view {
+        let tab_id = view.update(ctx, |view, ctx| view.open_tab(url, true, ctx));
+        return Ok((tab_id, view));
+    }
+
+    let workspace = WorkspaceRegistry::as_ref(ctx)
+        .get(window_id, ctx)
+        .ok_or_else(|| "No Warp window is open".to_owned())?;
+    workspace.update(ctx, |workspace, ctx| {
+        workspace.handle_action(&WorkspaceAction::OpenBrowserPane { url }, ctx);
+    });
+    let (tab_id, view) = BrowserViewRegistry::as_ref(ctx)
+        .resolve(None, ctx)
+        .ok_or_else(|| "The browser pane did not open".to_owned())?;
+    view.update(ctx, |view, _| view.mark_agent_driven(tab_id));
+    Ok((tab_id, view))
 }
 
 fn list_tabs(ctx: &ModelContext<BrowserAgent>) -> String {
