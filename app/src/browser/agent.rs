@@ -63,6 +63,10 @@ pub struct BrowserAgent {
     pending: Vec<PendingApproval>,
     /// Notes the user pinned to page elements that no agent has read yet.
     annotations: Vec<PageAnnotation>,
+    /// Whether the user paused agents, which holds their page actions until they resume.
+    paused: bool,
+    /// Calls that arrived while paused.
+    held: Vec<ToolRequest>,
 }
 
 /// A tool call waiting for the user to approve `site`.
@@ -72,6 +76,9 @@ struct PendingApproval {
     command: BrowserCommand,
     reply: Reply,
 }
+
+const STOPPED_MESSAGE: &str = "The user stopped the agent in the browser pane. Do not use the \
+browser again until they ask you to.";
 
 type Reply = tokio::sync::oneshot::Sender<ToolResult>;
 
@@ -91,6 +98,8 @@ impl BrowserAgent {
             approved_sites_path,
             pending: Vec::new(),
             annotations: Vec::new(),
+            paused: false,
+            held: Vec::new(),
         }
     }
 
@@ -102,6 +111,36 @@ impl BrowserAgent {
     /// Keeps a note for the next `browser_annotations` call.
     pub fn add_annotation(&mut self, annotation: PageAnnotation, ctx: &mut ModelContext<Self>) {
         self.annotations.push(annotation);
+        ctx.notify();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Pauses or resumes agents' page actions. Resuming runs the calls that waited.
+    pub fn set_paused(&mut self, paused: bool, ctx: &mut ModelContext<Self>) {
+        self.paused = paused;
+        if !paused {
+            for request in std::mem::take(&mut self.held) {
+                self.handle_request(request, ctx);
+            }
+        }
+        ctx.notify();
+    }
+
+    /// Rejects every call that is waiting, whether paused or waiting for approval, and resumes.
+    pub fn stop(&mut self, ctx: &mut ModelContext<Self>) {
+        self.paused = false;
+        for request in std::mem::take(&mut self.held) {
+            let _ = request.reply.send(Err(STOPPED_MESSAGE.to_owned()));
+        }
+        for pending in std::mem::take(&mut self.pending) {
+            if let Some(view) = pending.view.upgrade(ctx) {
+                view.update(ctx, |view, ctx| view.clear_agent_approval(ctx));
+            }
+            let _ = pending.reply.send(Err(STOPPED_MESSAGE.to_owned()));
+        }
         ctx.notify();
     }
 
@@ -169,6 +208,11 @@ impl BrowserAgent {
     }
 
     fn handle_request(&mut self, request: ToolRequest, ctx: &mut ModelContext<Self>) {
+        if self.paused && request.command.step().is_some() {
+            self.held.push(request);
+            ctx.notify();
+            return;
+        }
         let ToolRequest { command, reply } = request;
         match self.approval_needed(command, ctx) {
             Ok(Approval::NotNeeded(command)) => self.execute(command, reply, ctx),
@@ -257,6 +301,15 @@ impl BrowserAgent {
             let _ = reply.send(result);
         };
 
+        // A tab opened for the agent shows the step once it exists.
+        let step = command.step();
+        if let Some(step) = step.clone()
+            && !matches!(command, BrowserCommand::Open { .. })
+            && let Some((_, view)) = BrowserViewRegistry::as_ref(ctx).resolve(command.tab(), ctx)
+        {
+            view.update(ctx, |view, ctx| view.record_agent_step(step, ctx));
+        }
+
         match command {
             BrowserCommand::Annotations => {
                 let annotations = std::mem::take(&mut self.annotations);
@@ -264,7 +317,10 @@ impl BrowserAgent {
                 reply(Ok(ToolOutput::Text(format_annotations(&annotations))));
             }
             BrowserCommand::Open { url } => reply(
-                open_tab(Some(warp_browser::resolve_input(&url)), ctx).map(|(tab_id, _)| {
+                open_tab(Some(warp_browser::resolve_input(&url)), ctx).map(|(tab_id, view)| {
+                    if let Some(step) = step {
+                        view.update(ctx, |view, ctx| view.record_agent_step(step, ctx));
+                    }
                     ToolOutput::Text(format!(
                         "Opened {url} in tab {tab_id}. Call browser_read once it loads."
                     ))

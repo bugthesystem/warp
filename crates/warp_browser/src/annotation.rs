@@ -53,8 +53,9 @@ pub fn format_annotations(annotations: &[PageAnnotation]) -> String {
 }
 
 /// A script that turns annotate mode on or off in a page. While it is on, hovering outlines
-/// elements, and clicking one opens a note field; each saved note is posted to Warp and marked
-/// with a numbered badge. Escape closes the note field, then leaves annotate mode.
+/// elements; clicking one, or shift-dragging a box around an area, opens a note field. Each saved
+/// note is posted to Warp and marked with a numbered badge. Escape closes the note field, then
+/// leaves annotate mode.
 pub fn annotate_script(enabled: bool) -> String {
     format!(
         r##"(() => {{
@@ -103,9 +104,16 @@ pub fn annotate_script(enabled: bool) -> String {
     return parts.join(" > ");
   }};
   const closeEditor = () => {{ if (editor) {{ ui.delete(editor); editor.remove(); editor = null; }} }};
-  const openEditor = el => {{
+  const elementTarget = el => ({{ el, rect: el.getBoundingClientRect(), description: describe(el) }});
+  const areaTarget = rect => {{
+    const el = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      || document.body;
+    const size = `${{Math.round(rect.width)}}×${{Math.round(rect.height)}}`;
+    const at = `(${{Math.round(rect.left)}}, ${{Math.round(rect.top)}})`;
+    return {{ el, rect, description: `area ${{size}} at ${{at}} around ${{describe(el)}}` }};
+  }};
+  const openEditor = ({{ el, rect, description }}) => {{
     closeEditor();
-    const rect = el.getBoundingClientRect();
     const width = 300;
     const left = Math.max(8, Math.min(rect.left, innerWidth - width - 8));
     const top = rect.bottom + 120 < innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 112);
@@ -113,7 +121,7 @@ pub fn annotate_script(enabled: bool) -> String {
       + `background:#1c1b22;border:1px solid ${{accent}};box-shadow:0 8px 24px rgba(0,0,0,.35);`
       + `font:13px/1.4 -apple-system,system-ui,sans-serif;color:#f4f3f8;cursor:auto`);
     const label = document.createElement("div");
-    label.textContent = describe(el);
+    label.textContent = description;
     label.style.cssText = "color:#a99bff;font-size:11px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
     const field = document.createElement("textarea");
     field.placeholder = "What should the agent change here?";
@@ -132,7 +140,7 @@ pub fn annotate_script(enabled: bool) -> String {
         window.ipc.postMessage("{ANNOTATION_MESSAGE_PREFIX}" + JSON.stringify({{
           url: location.href,
           selector: selectorFor(el),
-          element: describe(el),
+          element: description,
           html: el.outerHTML.replace(/\s+/g, " ").slice(0, 400),
           note,
         }}));
@@ -149,7 +157,45 @@ pub fn annotate_script(enabled: bool) -> String {
     field.focus();
   }};
 
+  const box = layer(`pointer-events:none;border:2px solid ${{accent}};border-radius:4px;background:rgba(124,92,255,.12);display:none`);
+  let dragStart = null;
+  let dragged = false;
+  const dragRect = event => {{
+    const left = Math.min(dragStart.x, event.clientX);
+    const top = Math.min(dragStart.y, event.clientY);
+    return new DOMRect(left, top, Math.abs(event.clientX - dragStart.x), Math.abs(event.clientY - dragStart.y));
+  }};
+  const onDown = event => {{
+    if (own(event.target)) return;
+    swallow(event);
+    if (event.shiftKey) {{
+      closeEditor();
+      dragStart = {{ x: event.clientX, y: event.clientY }};
+    }}
+  }};
+  const onUp = event => {{
+    if (own(event.target) && !dragStart) return;
+    swallow(event);
+    if (!dragStart) return;
+    const rect = dragRect(event);
+    dragStart = null;
+    box.style.display = "none";
+    if (rect.width > 8 && rect.height > 8) {{
+      dragged = true;
+      openEditor(areaTarget(rect));
+    }}
+  }};
   const onMove = event => {{
+    if (dragStart) {{
+      const rect = dragRect(event);
+      hover.style.display = "none";
+      Object.assign(box.style, {{
+        display: "block",
+        left: `${{rect.left}}px`, top: `${{rect.top}}px`,
+        width: `${{rect.width}}px`, height: `${{rect.height}}px`,
+      }});
+      return;
+    }}
     if (editor || own(event.target)) {{ hover.style.display = "none"; return; }}
     const rect = event.target.getBoundingClientRect();
     Object.assign(hover.style, {{
@@ -159,11 +205,14 @@ pub fn annotate_script(enabled: bool) -> String {
     }});
   }};
   const swallow = event => {{ if (!own(event.target)) {{ event.preventDefault(); event.stopPropagation(); }} }};
+  // Cancelling pointerdown would also suppress the mousedown and mouseup that drags rely on.
+  const isolate = event => {{ if (!own(event.target)) event.stopPropagation(); }};
   const onClick = event => {{
     if (own(event.target)) return;
     swallow(event);
+    if (dragged) {{ dragged = false; return; }}
     hover.style.display = "none";
-    openEditor(event.target);
+    openEditor(elementTarget(event.target));
   }};
   const onKey = event => {{
     if (event.key !== "Escape") return;
@@ -172,8 +221,8 @@ pub fn annotate_script(enabled: bool) -> String {
     if (editor) closeEditor();
     else {{ stop(); window.ipc.postMessage("{ANNOTATE_EXITED_MESSAGE}"); }}
   }};
-  const listeners = [["mousemove", onMove], ["click", onClick], ["mousedown", swallow],
-    ["mouseup", swallow], ["pointerdown", swallow], ["keydown", onKey]];
+  const listeners = [["mousemove", onMove], ["click", onClick], ["mousedown", onDown],
+    ["mouseup", onUp], ["pointerdown", isolate], ["keydown", onKey]];
   for (const [type, listener] of listeners) window.addEventListener(type, listener, true);
   const stop = () => {{
     for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);

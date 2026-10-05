@@ -1,5 +1,8 @@
 use serde_json::{Map, Value};
 
+/// How many characters of typed text a step shows.
+const STEP_TEXT_PREVIEW: usize = 24;
+
 /// An action an agent asked a browser pane to take. `tab` selects a browser pane by the id
 /// `browser_tabs` reports; `None` means the most recently used one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +63,31 @@ impl BrowserCommand {
             | Self::Click { tab, .. }
             | Self::Type { tab, .. } => *tab,
             Self::Open { .. } | Self::ListTabs | Self::Annotations => None,
+        }
+    }
+
+    /// What the command does, shown to the user while the agent works. `None` for commands
+    /// that do not touch a page.
+    pub fn step(&self) -> Option<String> {
+        match self {
+            Self::Open { url } => Some(format!("Opening {url}")),
+            Self::Navigate { url, .. } => Some(format!("Going to {url}")),
+            Self::Read { .. } => Some("Reading the page".to_owned()),
+            Self::Screenshot { .. } => Some("Taking a screenshot".to_owned()),
+            Self::Console { .. } => Some("Checking the console".to_owned()),
+            Self::Click { element, .. } => Some(format!("Clicking element {element}")),
+            Self::Type { element, text, .. } => {
+                let preview: String = text.chars().take(STEP_TEXT_PREVIEW).collect();
+                let ellipsis = if text.chars().count() > STEP_TEXT_PREVIEW {
+                    "…"
+                } else {
+                    ""
+                };
+                Some(format!(
+                    "Typing \"{preview}{ellipsis}\" into element {element}"
+                ))
+            }
+            Self::ListTabs | Self::Annotations => None,
         }
     }
 

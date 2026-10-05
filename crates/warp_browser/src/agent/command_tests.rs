@@ -116,3 +116,31 @@ fn tab_is_reported_for_commands_that_act_on_a_tab() {
     assert_eq!(click.tab(), Some(3));
     assert_eq!(open.tab(), None);
 }
+
+#[test]
+fn describes_page_actions_as_steps() {
+    let click = BrowserCommand::Click {
+        tab: None,
+        element: 4,
+    };
+    let read = BrowserCommand::Read { tab: Some(2) };
+
+    assert_eq!(click.step().as_deref(), Some("Clicking element 4"));
+    assert_eq!(read.step().as_deref(), Some("Reading the page"));
+    assert_eq!(BrowserCommand::ListTabs.step(), None);
+}
+
+#[test]
+fn shortens_typed_text_in_steps() {
+    let command = BrowserCommand::Type {
+        tab: None,
+        element: 2,
+        text: "a".repeat(30),
+        submit: false,
+    };
+
+    assert_eq!(
+        command.step().as_deref(),
+        Some("Typing \"aaaaaaaaaaaaaaaaaaaaaaaa…\" into element 2")
+    );
+}

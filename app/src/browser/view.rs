@@ -44,6 +44,9 @@ const NEW_TAB_TITLE: &str = "New Tab";
 const MAX_RECENTS: usize = 8;
 const MAX_LOCAL_SERVERS: usize = 6;
 const NOTICE_DURATION: Duration = Duration::from_secs(2);
+/// How long the agent activity bar stays after an agent's last step.
+const AGENT_ACTIVITY_LINGER: Duration = Duration::from_secs(4);
+const MAX_AGENT_STEPS: usize = 5;
 
 const URL_FIELD_PLACEHOLDER: &str = "Search or enter URL";
 
@@ -79,6 +82,8 @@ pub enum BrowserViewAction {
     ToggleAgentAutoApprove,
     ToggleAnnotate,
     CopyScreenshot,
+    SetAgentPaused(bool),
+    StopAgent,
 }
 
 /// The user's answer when an agent asks to use a site that is not local.
@@ -119,6 +124,12 @@ pub struct BrowserView {
     screenshot_button: MouseStateHandle,
     /// Confirmation shown briefly in the toolbar.
     notice: Option<&'static str>,
+    /// What agents did in this pane recently, oldest first. Cleared once they go quiet.
+    agent_steps: Vec<String>,
+    /// Bumped with each step, so only the latest step's timer clears the steps.
+    agent_step_generation: u64,
+    pause_agent_button: MouseStateHandle,
+    stop_agent_button: MouseStateHandle,
     /// A site an agent is waiting for the user to approve.
     agent_approval_site: Option<String>,
     approve_once_button: MouseStateHandle,
@@ -211,6 +222,10 @@ impl BrowserView {
             annotate_button: MouseStateHandle::default(),
             screenshot_button: MouseStateHandle::default(),
             notice: None,
+            agent_steps: Vec::new(),
+            agent_step_generation: 0,
+            pause_agent_button: MouseStateHandle::default(),
+            stop_agent_button: MouseStateHandle::default(),
             agent_approval_site: None,
             approve_once_button: MouseStateHandle::default(),
             approve_always_button: MouseStateHandle::default(),
@@ -308,6 +323,23 @@ impl BrowserView {
     /// Asks the user, in this pane, whether an agent may use `site`.
     pub fn request_agent_approval(&mut self, site: String, ctx: &mut ViewContext<Self>) {
         self.agent_approval_site = Some(site);
+        ctx.notify();
+    }
+
+    /// Shows that an agent is taking `step` in this pane.
+    pub fn record_agent_step(&mut self, step: String, ctx: &mut ViewContext<Self>) {
+        self.agent_steps.push(step);
+        if self.agent_steps.len() > MAX_AGENT_STEPS {
+            self.agent_steps.remove(0);
+        }
+        self.agent_step_generation += 1;
+        let generation = self.agent_step_generation;
+        ctx.spawn(Timer::after(AGENT_ACTIVITY_LINGER), move |me, _, ctx| {
+            if me.agent_step_generation == generation {
+                me.agent_steps.clear();
+                ctx.notify();
+            }
+        });
         ctx.notify();
     }
 
@@ -893,6 +925,73 @@ impl BrowserView {
         .finish()
     }
 
+    /// What the agent is doing, with controls to pause it, hand control back, or stop it.
+    fn render_agent_activity(&self, paused: bool, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let status = if paused {
+            "Agent paused. You're in control.".to_owned()
+        } else {
+            match self.agent_steps.last() {
+                Some(step) => format!("Agent: {step}"),
+                None => "Agent".to_owned(),
+            }
+        };
+        let (toggle_label, toggle_action) = if paused {
+            ("Resume", BrowserViewAction::SetAgentPaused(false))
+        } else {
+            ("Pause", BrowserViewAction::SetAgentPaused(true))
+        };
+        let button = |label: &str, mouse_state: &MouseStateHandle, action: BrowserViewAction| {
+            appearance
+                .ui_builder()
+                .button(ButtonVariant::Secondary, mouse_state.clone())
+                .with_centered_text_label(label.to_owned())
+                .build()
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+        };
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.)
+                .with_child(
+                    ConstrainedBox::new(Icon::AgentMode.to_warpui_icon(theme.accent()).finish())
+                        .with_width(TAB_ICON_SIZE)
+                        .with_height(TAB_ICON_SIZE)
+                        .finish(),
+                )
+                .with_child(
+                    Shrinkable::new(
+                        1.,
+                        Text::new_inline(
+                            status,
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(button(
+                    toggle_label,
+                    &self.pause_agent_button,
+                    toggle_action,
+                ))
+                .with_child(button(
+                    "Stop",
+                    &self.stop_agent_button,
+                    BrowserViewAction::StopAgent,
+                ))
+                .finish(),
+        )
+        .with_horizontal_padding(12.)
+        .with_vertical_padding(6.)
+        .with_background(theme.accent().with_opacity(12))
+        .with_border(Border::bottom(1.).with_border_fill(theme.accent()))
+        .finish()
+    }
+
     /// The prompt asking whether an agent may use a site that is not local.
     fn render_agent_approval(&self, site: &str, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1332,6 +1431,11 @@ impl View for BrowserView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        #[cfg(not(target_family = "wasm"))]
+        let agent_paused = super::BrowserAgent::as_ref(app).is_paused();
+        #[cfg(target_family = "wasm")]
+        let agent_paused = false;
+        let agent_active = agent_paused || !self.agent_steps.is_empty();
         // Saved for a single frame so the position is absent whenever the pane is not drawn,
         // which is what hides the web view.
         let content_area = if self.active().url.is_empty() {
@@ -1348,9 +1452,19 @@ impl View for BrowserView {
                 .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
                 .finish(),
         );
+        if agent_active {
+            column.add_child(self.render_agent_activity(agent_paused, appearance));
+        }
         if let Some(site) = &self.agent_approval_site {
             column.add_child(self.render_agent_approval(site, appearance));
         }
+        let content_area = if agent_active {
+            Container::new(content_area)
+                .with_border(Border::all(2.).with_border_fill(appearance.theme().accent()))
+                .finish()
+        } else {
+            content_area
+        };
         column
             .with_child(Expanded::new(1., content_area).finish())
             .finish()
@@ -1393,6 +1507,19 @@ impl TypedActionView for BrowserView {
                 #[cfg(not(target_family = "wasm"))]
                 super::BrowserAgent::handle(ctx)
                     .update(ctx, |agent, ctx| agent.toggle_auto_approve(ctx));
+            }
+            BrowserViewAction::SetAgentPaused(paused) => {
+                #[cfg(not(target_family = "wasm"))]
+                super::BrowserAgent::handle(ctx)
+                    .update(ctx, |agent, ctx| agent.set_paused(*paused, ctx));
+                #[cfg(target_family = "wasm")]
+                let _ = paused;
+            }
+            BrowserViewAction::StopAgent => {
+                self.agent_steps.clear();
+                #[cfg(not(target_family = "wasm"))]
+                super::BrowserAgent::handle(ctx).update(ctx, |agent, ctx| agent.stop(ctx));
+                ctx.notify();
             }
             BrowserViewAction::ToggleAnnotate => self.set_annotating(!self.annotating, ctx),
             BrowserViewAction::CopyScreenshot => self.copy_screenshot(ctx),
