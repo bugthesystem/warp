@@ -2007,9 +2007,20 @@ impl PaneGroup {
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
             }
-            LeafContents::Browser => Err(anyhow::anyhow!(
-                "Browser pane should not have been persisted, as it cannot be restored"
-            )),
+            LeafContents::Browser(snapshot) => {
+                if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
+                    return Err(anyhow::anyhow!("Browser panes are not enabled"));
+                }
+                let pane: Box<dyn AnyPaneContent + 'static> =
+                    Box::new(BrowserPane::restore(&snapshot, ctx));
+                let pane_id = pane.as_pane().id();
+                pane_contents.insert(pane_id, pane);
+                let focus = InitialFocus {
+                    focused_pane: leaf.is_focused.then_some(pane_id),
+                    active_session: None,
+                };
+                Ok((PaneData::new(pane_id), focus))
+            }
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))

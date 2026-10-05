@@ -73,11 +73,11 @@ use crate::ai::mcp::templatable_installation::VariableValue;
 use crate::ai::mcp::{TemplatableMCPServer, TemplatableMCPServerInstallation};
 use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::{
-    AIFactPaneSnapshot, AmbientAgentPaneSnapshot, AppState, BranchSnapshot, CodePaneSnapShot,
-    CodePaneTabSnapshot, CodeReviewPaneSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
-    LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot,
-    RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot,
-    TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    AIFactPaneSnapshot, AmbientAgentPaneSnapshot, AppState, BranchSnapshot, BrowserPaneSnapshot,
+    CodePaneSnapShot, CodePaneTabSnapshot, CodeReviewPaneSnapshot, EnvVarCollectionPaneSnapshot,
+    LeafContents, LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex,
+    PaneNodeSnapshot, RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabGroupSnapshot,
+    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::auth::UserUid;
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
@@ -95,8 +95,8 @@ use crate::persistence::block_list::{
     process_ai_queries_for_uparrow_prompt, read_recent_ai_queries,
 };
 use crate::persistence::model::{
-    CODE_REVIEW_PANE_KIND, GET_STARTED_PANE_KIND, NewPersistedObjectAction, NewTeamSettings,
-    ProjectRules, UserProfile,
+    BROWSER_PANE_KIND, CODE_REVIEW_PANE_KIND, GET_STARTED_PANE_KIND, NewPersistedObjectAction,
+    NewTeamSettings, ProjectRules, UserProfile,
 };
 use crate::server::experiments::ServerExperiment;
 use crate::server::ids::{ClientId, HashableId, ServerId, SyncId};
@@ -926,6 +926,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
         diesel::delete(schema::workflow_panes::dsl::workflow_panes).execute(conn)?;
         diesel::delete(schema::settings_panes::dsl::settings_panes).execute(conn)?;
         diesel::delete(schema::ai_memory_panes::dsl::ai_memory_panes).execute(conn)?;
+        diesel::delete(schema::browser_panes::dsl::browser_panes).execute(conn)?;
         diesel::delete(schema::ai_document_panes::dsl::ai_document_panes).execute(conn)?;
         diesel::delete(schema::mcp_server_panes::dsl::mcp_server_panes).execute(conn)?;
         diesel::delete(schema::code_review_panes::dsl::code_review_panes).execute(conn)?;
@@ -1210,9 +1211,8 @@ fn save_pane_state(
         }
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        LeafContents::EnvironmentManagement(_)
-        | LeafContents::NetworkLog
-        | LeafContents::Browser => {
+        LeafContents::Browser(_) => BROWSER_PANE_KIND,
+        LeafContents::EnvironmentManagement(_) | LeafContents::NetworkLog => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1440,7 +1440,18 @@ fn save_pane_state(
                 .values(ambient_agent_pane)
                 .execute(conn)?;
         }
-        LeafContents::NetworkLog | LeafContents::Browser => {
+        LeafContents::Browser(snapshot) => {
+            let browser_pane = model::NewBrowserPane {
+                id,
+                tab_urls: serde_json::to_string(&snapshot.tab_urls)
+                    .expect("a list of strings always serializes to JSON"),
+                active_tab_index: i32::try_from(snapshot.active_tab_index).unwrap_or(0),
+            };
+            diesel::insert_into(schema::browser_panes::dsl::browser_panes)
+                .values(browser_pane)
+                .execute(conn)?;
+        }
+        LeafContents::NetworkLog => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }
@@ -2394,6 +2405,17 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                     }
                 }
                 GET_STARTED_PANE_KIND => LeafContents::GetStarted,
+                BROWSER_PANE_KIND => {
+                    let browser_pane = schema::browser_panes::dsl::browser_panes
+                        .find(node.id)
+                        .select(model::BrowserPane::as_select())
+                        .first(conn)?;
+                    LeafContents::Browser(BrowserPaneSnapshot {
+                        tab_urls: serde_json::from_str(&browser_pane.tab_urls).unwrap_or_default(),
+                        active_tab_index: usize::try_from(browser_pane.active_tab_index)
+                            .unwrap_or(0),
+                    })
+                }
                 AI_DOCUMENT_PANE_KIND => {
                     let ai_document_pane = schema::ai_document_panes::dsl::ai_document_panes
                         .find(node.id)

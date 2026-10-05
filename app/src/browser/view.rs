@@ -18,6 +18,7 @@ use warpui::{
 
 use super::geometry::webview_bounds;
 use super::{BrowserHistoryModel, BrowserViewRegistry};
+use crate::app_state::BrowserPaneSnapshot;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::PaneHeaderAction;
@@ -137,7 +138,18 @@ struct PlacedWebView {
 }
 
 impl BrowserView {
+    /// Creates a view with one tab showing `url`, or the new-tab page.
     pub fn new(url: Option<String>, ctx: &mut ViewContext<Self>) -> Self {
+        Self::with_tabs(&[url.unwrap_or_default()], 0, ctx)
+    }
+
+    /// Creates a view with a tab per URL, where an empty URL is a new-tab page, and the given tab
+    /// active.
+    pub fn with_tabs(
+        tab_urls: &[String],
+        active_tab_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(DEFAULT_TITLE));
 
         let appearance = Appearance::as_ref(ctx);
@@ -187,8 +199,22 @@ impl BrowserView {
         };
         #[cfg(not(target_family = "wasm"))]
         ctx.observe(&super::BrowserAgent::handle(ctx), |_, _, ctx| ctx.notify());
-        view.open_tab(url, false, ctx);
+        for url in tab_urls {
+            view.open_tab((!url.is_empty()).then(|| url.clone()), false, ctx);
+        }
+        if view.tabs.is_empty() {
+            view.open_tab(None, false, ctx);
+        }
+        view.activate(active_tab_index.min(view.tabs.len() - 1), ctx);
         view
+    }
+
+    /// The pane's tabs, for saving across restarts.
+    pub fn snapshot(&self) -> BrowserPaneSnapshot {
+        BrowserPaneSnapshot {
+            tab_urls: self.tabs.iter().map(|tab| tab.url.clone()).collect(),
+            active_tab_index: self.active_tab,
+        }
     }
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {

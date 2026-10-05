@@ -5,7 +5,7 @@ use super::{
     DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
-use crate::app_state::LeafContents;
+use crate::app_state::{BrowserPaneSnapshot, LeafContents};
 use crate::browser::{BrowserView, BrowserViewEvent};
 use crate::pane_group::focus_state::PaneFocusHandle;
 
@@ -18,6 +18,18 @@ impl BrowserPane {
     /// Creates a browser pane showing `url`, or a default page when `url` is `None`.
     pub fn new<V: View>(url: Option<String>, ctx: &mut ViewContext<V>) -> Self {
         let browser_view = ctx.add_typed_action_view(|ctx| BrowserView::new(url, ctx));
+        Self::from_view(browser_view, ctx)
+    }
+
+    /// Recreates a browser pane from a snapshot saved before a restart.
+    pub fn restore<V: View>(snapshot: &BrowserPaneSnapshot, ctx: &mut ViewContext<V>) -> Self {
+        let browser_view = ctx.add_typed_action_view(|ctx| {
+            BrowserView::with_tabs(&snapshot.tab_urls, snapshot.active_tab_index, ctx)
+        });
+        Self::from_view(browser_view, ctx)
+    }
+
+    fn from_view<V: View>(browser_view: ViewHandle<BrowserView>, ctx: &mut ViewContext<V>) -> Self {
         let pane_configuration = browser_view.as_ref(ctx).pane_configuration();
 
         let view = ctx.add_typed_action_view(|ctx| {
@@ -73,8 +85,8 @@ impl PaneContent for BrowserPane {
         ctx.unsubscribe_to_view(&self.view);
     }
 
-    fn snapshot(&self, _app: &AppContext) -> LeafContents {
-        LeafContents::Browser
+    fn snapshot(&self, app: &AppContext) -> LeafContents {
+        LeafContents::Browser(self.browser_view(app).as_ref(app).snapshot())
     }
 
     fn has_application_focus(&self, ctx: &mut ViewContext<PaneGroup>) -> bool {
