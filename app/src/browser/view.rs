@@ -33,6 +33,8 @@ const TOOLBAR_PADDING: f32 = 4.;
 
 const TAB_MAX_WIDTH: f32 = 200.;
 
+const STATUS_ICON_SIZE: f32 = 16.;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
     Pane(PaneEvent),
@@ -501,9 +503,14 @@ impl BrowserView {
                 BrowserViewAction::Reload,
             ))
             .with_child(
-                status_icon
-                    .to_warpui_icon(appearance.theme().nonactive_ui_text_color())
-                    .finish(),
+                ConstrainedBox::new(
+                    status_icon
+                        .to_warpui_icon(appearance.theme().nonactive_ui_text_color())
+                        .finish(),
+                )
+                .with_width(STATUS_ICON_SIZE)
+                .with_height(STATUS_ICON_SIZE)
+                .finish(),
             )
             .with_child(Expanded::new(1., url_field).finish())
             .finish()

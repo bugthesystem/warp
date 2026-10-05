@@ -440,12 +440,6 @@ impl TemplatableMCPServerManager {
         // (fresh logins are handled by the AuthManager subscription above).
         if !cfg!(test) {
             me.sync_builtin_servers(false, ctx);
-            if FeatureFlag::BrowserPane.is_enabled()
-                && warp_browser::is_supported()
-                && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
-            {
-                me.spawn_ephemeral_server(builtin::browser_mcp_installation(), ctx);
-            }
         }
 
         // Migrate legacy MCPs to be templatables on app start. Uses UpdateManager
@@ -779,6 +773,17 @@ impl TemplatableMCPServerManager {
     /// `force_respawn` restarts an already-running server so it picks up
     /// rotated credentials: the transport keeps the `Authorization` header it
     /// was spawned with.
+    /// Attaches the built-in browser MCP server, which Warp's local HTTP server hosts, so the
+    /// agent can drive browser panes. Call once that server is listening.
+    pub fn attach_browser_server(&mut self, ctx: &mut ModelContext<Self>) {
+        if FeatureFlag::BrowserPane.is_enabled()
+            && warp_browser::is_supported()
+            && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
+        {
+            self.spawn_ephemeral_server(builtin::browser_mcp_installation(), ctx);
+        }
+    }
+
     pub fn sync_builtin_servers(&mut self, force_respawn: bool, ctx: &mut ModelContext<Self>) {
         let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();

@@ -2635,6 +2635,8 @@ pub(crate) fn initialize_app(
             }
             http_server::HttpServer::new(routers, ctx)
         });
+        TemplatableMCPServerManager::handle(ctx)
+            .update(ctx, |manager, ctx| manager.attach_browser_server(ctx));
     }
     #[cfg(feature = "local_fs")]
     if matches!(
