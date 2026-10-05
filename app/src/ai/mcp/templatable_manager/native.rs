@@ -440,6 +440,12 @@ impl TemplatableMCPServerManager {
         // (fresh logins are handled by the AuthManager subscription above).
         if !cfg!(test) {
             me.sync_builtin_servers(false, ctx);
+            if FeatureFlag::BrowserPane.is_enabled()
+                && warp_browser::is_supported()
+                && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
+            {
+                me.spawn_ephemeral_server(builtin::browser_mcp_installation(), ctx);
+            }
         }
 
         // Migrate legacy MCPs to be templatables on app start. Uses UpdateManager

@@ -4,6 +4,8 @@
 //! WarpUI element, so callers position it explicitly with [`WebView::set_bounds`]. Only macOS is
 //! supported; on other platforms [`window_parent`] returns `None` and no web view can be created.
 
+#[cfg(not(target_family = "wasm"))]
+pub mod agent;
 mod url_input;
 
 #[cfg(target_os = "macos")]

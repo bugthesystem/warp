@@ -1,8 +1,12 @@
+use std::cell::Cell;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::Mutex;
 
+use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2_app_kit::NSView;
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSView};
+use objc2_foundation::{NSDictionary, NSError};
 use pathfinder_geometry::rect::RectF;
 use warpui::platform::mac::WindowExt;
 use warpui::{AppContext, WindowId};
@@ -10,7 +14,7 @@ use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::{
     AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
 };
-use wry::{PageLoadEvent, Rect, WebViewBuilder};
+use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
 use crate::{Error, WebViewEvent};
 
@@ -89,6 +93,14 @@ impl WebView {
         Ok(self.webview.url()?)
     }
 
+    pub fn can_go_back(&self) -> Result<bool, Error> {
+        Ok(self.webview.can_go_back()?)
+    }
+
+    pub fn can_go_forward(&self) -> Result<bool, Error> {
+        Ok(self.webview.can_go_forward()?)
+    }
+
     pub fn go_back(&self) -> Result<(), Error> {
         Ok(self.webview.go_back()?)
     }
@@ -101,6 +113,41 @@ impl WebView {
         Ok(self.webview.reload()?)
     }
 
+    /// Runs `script` in the page and calls `on_result` with its value serialized as JSON.
+    pub fn evaluate(
+        &self,
+        script: &str,
+        on_result: impl FnOnce(String) + Send + 'static,
+    ) -> Result<(), Error> {
+        let on_result = Mutex::new(Some(on_result));
+        Ok(self
+            .webview
+            .evaluate_script_with_callback(script, move |result| {
+                if let Some(on_result) = on_result.lock().ok().and_then(|mut slot| slot.take()) {
+                    on_result(result);
+                }
+            })?)
+    }
+
+    /// Captures what the web view shows as a PNG and calls `on_done` with it, or with `None` if
+    /// WebKit could not take the snapshot.
+    pub fn snapshot_png(&self, on_done: impl FnOnce(Option<Vec<u8>>) + 'static) {
+        let on_done = Cell::new(Some(on_done));
+        let handler = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+            if let Some(on_done) = on_done.take() {
+                // SAFETY: WebKit passes either null or a valid image for the duration of the call.
+                on_done(unsafe { image.as_ref() }.and_then(png_data));
+            }
+        });
+        // SAFETY: a `None` configuration snapshots the visible bounds, and `handler` matches the
+        // completion handler's signature.
+        unsafe {
+            self.webview
+                .webview()
+                .takeSnapshotWithConfiguration_completionHandler(None, &handler);
+        }
+    }
+
     /// Gives the web view keyboard focus.
     pub fn focus(&self) -> Result<(), Error> {
         Ok(self.webview.focus()?)
@@ -110,6 +157,16 @@ impl WebView {
     pub fn focus_parent(&self) -> Result<(), Error> {
         Ok(self.webview.focus_parent()?)
     }
+}
+
+fn png_data(image: &NSImage) -> Option<Vec<u8>> {
+    let tiff = image.TIFFRepresentation()?;
+    let bitmap = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    // SAFETY: an empty properties dictionary is valid for PNG encoding.
+    let png = unsafe {
+        bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }?;
+    Some(png.to_vec())
 }
 
 fn to_wry_rect(bounds: RectF) -> Rect {

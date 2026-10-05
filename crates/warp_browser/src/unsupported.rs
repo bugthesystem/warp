@@ -42,6 +42,14 @@ impl WebView {
         match self.0 {}
     }
 
+    pub fn can_go_back(&self) -> Result<bool, Error> {
+        match self.0 {}
+    }
+
+    pub fn can_go_forward(&self) -> Result<bool, Error> {
+        match self.0 {}
+    }
+
     pub fn go_back(&self) -> Result<(), Error> {
         match self.0 {}
     }
@@ -51,6 +59,18 @@ impl WebView {
     }
 
     pub fn reload(&self) -> Result<(), Error> {
+        match self.0 {}
+    }
+
+    pub fn evaluate(
+        &self,
+        _script: &str,
+        _on_result: impl FnOnce(String) + Send + 'static,
+    ) -> Result<(), Error> {
+        match self.0 {}
+    }
+
+    pub fn snapshot_png(&self, _on_done: impl FnOnce(Option<Vec<u8>>) + 'static) {
         match self.0 {}
     }
 

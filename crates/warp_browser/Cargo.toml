@@ -13,7 +13,39 @@ thiserror.workspace = true
 url.workspace = true
 warpui.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-channel.workspace = true
+axum.workspace = true
+base64.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 objc2.workspace = true
-objc2-app-kit = { workspace = true, features = ["NSView"] }
+objc2-app-kit = { workspace = true, features = [
+    "NSBitmapImageRep",
+    "NSImage",
+    "NSImageRep",
+    "NSView",
+] }
+objc2-foundation = { workspace = true, features = ["NSData", "NSDictionary", "NSError"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "block2",
+    "objc2-app-kit",
+    "std",
+    "WKSnapshotConfiguration",
+    "WKWebView",
+] }
 wry.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+reqwest.workspace = true
+rmcp = { workspace = true, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }

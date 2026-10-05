@@ -127,6 +127,59 @@ fn factory_mcp_installation_for_server_root(
     )
 }
 
+/// Stable installation UUID for the built-in browser MCP server.
+#[cfg(not(target_family = "wasm"))]
+pub const BROWSER_MCP_INSTALLATION_UUID: Uuid =
+    Uuid::from_u128(0xb7a05e72_6c1d_4f0e_9a3b_1c0ffee0f101);
+
+/// Stable template UUID for the built-in browser MCP server.
+#[cfg(not(target_family = "wasm"))]
+const BROWSER_MCP_TEMPLATE_UUID: Uuid = Uuid::from_u128(0xb7a05e72_6c1d_4f0e_9a3b_1c0ffee0f102);
+
+/// The server name under which the browser pane's tools are grouped.
+#[cfg(not(target_family = "wasm"))]
+pub const BROWSER_MCP_SERVER_NAME: &str = "warp-browser";
+
+/// Builds the ephemeral installation for the built-in browser MCP server, which Warp's own local
+/// HTTP server hosts so agents can drive browser panes.
+#[cfg(not(target_family = "wasm"))]
+pub fn browser_mcp_installation() -> TemplatableMCPServerInstallation {
+    let server_config = serde_json::json!({
+        "url": format!(
+            "http://127.0.0.1:{}{}",
+            http_server::HttpServer::port(),
+            warp_browser::agent::MCP_PATH
+        ),
+        "headers": {
+            "Authorization": format!("Bearer {}", warp_browser::agent::session_token()),
+        },
+    });
+    let mut root = serde_json::Map::new();
+    root.insert(BROWSER_MCP_SERVER_NAME.to_string(), server_config);
+
+    let templatable_mcp_server = TemplatableMCPServer {
+        uuid: BROWSER_MCP_TEMPLATE_UUID,
+        name: BROWSER_MCP_SERVER_NAME.to_string(),
+        description: Some(
+            "Warp's browser pane. Open pages, read their text and interactive elements, take \
+             screenshots, click and type."
+                .to_string(),
+        ),
+        template: JsonTemplate {
+            json: serde_json::Value::Object(root).to_string(),
+            variables: Vec::new(),
+        },
+        version: 0,
+        gallery_data: None,
+    };
+
+    TemplatableMCPServerInstallation::new(
+        BROWSER_MCP_INSTALLATION_UUID,
+        templatable_mcp_server,
+        HashMap::new(),
+    )
+}
+
 /// Joins the Factory MCP endpoint path onto a server root URL.
 fn factory_mcp_url(server_root: &str) -> String {
     format!("{}/api/v1/mcp/factory", server_root.trim_end_matches('/'))

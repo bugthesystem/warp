@@ -1872,6 +1872,8 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
     ctx.add_singleton_model(|_| NetworkLogPaneManager::default());
     ctx.add_singleton_model(|_| browser::BrowserViewRegistry::default());
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(browser::BrowserAgent::new);
     ctx.on_frame_drawn(|ctx, window_id| browser::sync_webviews(window_id, ctx));
     ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(ai::pricing_promotion::PricingPromotionState::new);
@@ -2623,10 +2625,13 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     if launch_mode.should_start_local_http_server() {
         ctx.add_singleton_model(move |ctx| {
-            let routers = vec![
+            let mut routers = vec![
                 app_installation_detection::make_router(),
                 profiling::make_router(),
             ];
+            if FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported() {
+                routers.push(browser::BrowserAgent::as_ref(ctx).router());
+            }
             http_server::HttpServer::new(routers, ctx)
         });
     }
