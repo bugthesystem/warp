@@ -39,7 +39,8 @@ impl HttpServer {
     ) -> Result<tokio::runtime::Runtime, std::io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .enable_io()
+            // Hosted services such as MCP sessions rely on timers as well as IO.
+            .enable_all()
             .build()?;
 
         let mut root = axum::Router::new();
