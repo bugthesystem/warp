@@ -49,6 +49,9 @@ Developers running a dev server or reading docs alongside a terminal session swi
 15. Agent tools only reach tabs in browser panes, and each action happens in a tab the user can see.
 16. Agent browser actions go through the agent's MCP permission settings, so by default the user approves each one. Profiles can allow the `warp-browser` MCP server to skip approval.
 17. `⌘`-clicking a link to a local address (per 6.2) in terminal output opens it in a browser pane. Other links open in the default browser as before.
+18. Before an agent clicks or types, a visible cursor moves to the element and the element is outlined, so the user can follow along. The user's own mouse pointer is never moved.
+19. Agents can read a tab's console messages, uncaught errors and failed network requests.
+20. "Copy Claude Code setup for browser tools" in the command palette copies a command that gives Claude Code the same browser tools. The setup keeps working after Warp restarts.
 
 ## Success criteria
 
