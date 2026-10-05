@@ -15778,6 +15778,7 @@ dependencies = [
  "warp-command-signatures",
  "warp-workflows",
  "warp_assets",
+ "warp_browser",
  "warp_channel_config",
  "warp_cli",
  "warp_completer",
