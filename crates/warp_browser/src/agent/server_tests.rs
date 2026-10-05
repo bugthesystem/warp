@@ -1,6 +1,6 @@
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use rmcp::ServiceExt as _;
-use rmcp::model::{CallToolRequestParams, ClientConfig};
+use rmcp::model::{CacheScope, CallToolRequestParams, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -72,6 +72,17 @@ async fn lists_the_browser_tools() {
             "browser_type",
         ]
     );
+}
+
+#[tokio::test]
+async fn marks_the_tool_list_as_private_and_uncached() {
+    let (url, _requests) = serve().await;
+    let client = connect(&url).await;
+
+    let result = client.list_tools(None).await.unwrap();
+
+    assert_eq!(result.ttl_ms, Some(0));
+    assert_eq!(result.cache_scope, Some(CacheScope::Private));
 }
 
 #[tokio::test]

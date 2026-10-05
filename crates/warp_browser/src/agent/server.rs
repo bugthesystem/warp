@@ -7,8 +7,8 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use base64::Engine;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -99,10 +99,11 @@ impl ServerHandler for BrowserMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult {
-            tools: tool_definitions(),
-            ..Default::default()
-        })
+        // Protocol 2026-07-28 clients reject list results without cache hints. The tools only
+        // reach holders of this Warp instance's token, so they must not be shared.
+        Ok(ListToolsResult::with_all_items(tool_definitions())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
