@@ -9,7 +9,7 @@ use crate::{Error, WebViewEvent};
 pub struct WebViewParent(Infallible);
 
 /// Always `None`: web views are not supported on this platform.
-pub fn window_parent(_app: &AppContext, _window_id: WindowId) -> Option<WebViewParent> {
+pub fn window_parent(_window_id: WindowId, _ctx: &AppContext) -> Option<WebViewParent> {
     None
 }
 

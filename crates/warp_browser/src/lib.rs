@@ -32,8 +32,6 @@ pub enum WebViewEvent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("web views are not supported on this platform")]
-    Unsupported,
     #[cfg(target_os = "macos")]
     #[error(transparent)]
     WebView(#[from] wry::Error),

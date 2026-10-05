@@ -28,8 +28,8 @@ impl HasWindowHandle for WebViewParent {
 }
 
 /// Returns the content view of the given window, or `None` if it has no native window.
-pub fn window_parent(app: &AppContext, window_id: WindowId) -> Option<WebViewParent> {
-    let window = app.windows().platform_window(window_id)?;
+pub fn window_parent(window_id: WindowId, ctx: &AppContext) -> Option<WebViewParent> {
+    let window = ctx.windows().platform_window(window_id)?;
     let view = window.as_ref().content_view()?;
     Some(WebViewParent { view })
 }
