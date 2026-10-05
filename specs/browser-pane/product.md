@@ -21,7 +21,7 @@ Developers running a dev server or reading docs alongside a terminal session swi
 ## Non-goals
 
 - Windows and Linux support (follow-ups; the code stays platform-neutral where it can).
-- History sidebar, bookmarks, a new-tab page and restoring tabs after a restart (later versions).
+- History sidebar and bookmarks (later versions).
 - DevTools outside debug builds.
 - Replacing the user's default browser for links outside the browser pane.
 
@@ -47,12 +47,16 @@ Developers running a dev server or reading docs alongside a terminal session swi
 13. While the page has focus, Warp's pane-navigation and window shortcuts still work.
 14. Cookies and logins persist across restarts.
 15. Agent tools only reach tabs in browser panes, and each action happens in a tab the user can see.
-16. Agent browser actions go through the agent's MCP permission settings, so by default the user approves each one. Profiles can allow the `warp-browser` MCP server to skip approval.
+16. Agents act on local addresses (per 6.2) without asking. Before an agent opens, reads or operates a page on any other site, the pane shows a banner naming the site with "Allow once", "Always allow" and "Deny", and the agent waits for the answer. "Always allow" is remembered for that site across restarts; `www.` is ignored when matching sites. Warp's own agent additionally goes through its MCP permission settings.
 17. `⌘`-clicking a link to a local address (per 6.2) in terminal output opens it in a browser pane. Other links open in the default browser as before.
 18. Before an agent clicks or types, a visible cursor moves to the element and the element is outlined, so the user can follow along. The user's own mouse pointer is never moved.
 19. Agents can read a tab's console messages, uncaught errors and failed network requests.
 20. "Copy Claude Code setup for browser tools" in the command palette copies a command that gives Claude Code the same browser tools. The setup keeps working after Warp restarts.
+21. The toolbar always shows the agent approval mode as "Agent: Ask" or "Agent: Auto". Clicking it, or "Toggle browser agent auto-approve" in the command palette, switches mode. In Auto, agents act on every site without a banner. The mode persists across restarts.
+22. A new tab shows a start page instead of a web page. It lists local apps visited recently, sites opened by agents, and other recent sites, most recent first, each with its title and address. Clicking one loads it in that tab.
+23. Visited pages, their titles and whether an agent opened them are kept across restarts, up to the 200 most recent.
+24. After Warp restarts, each browser pane comes back with its tabs at the URLs they last showed, and the same tab active. Tabs showing the start page come back as start pages.
 
 ## Success criteria
 
-Each behavior above can be checked by hand on a Mac. Behavior 6 is covered by unit tests.
+Each behavior above can be checked by hand on a Mac. Behaviors 6, 16 (site matching), 22 (grouping) and 23 are covered by unit tests, and 24 by a persistence round-trip test.
