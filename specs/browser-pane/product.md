@@ -31,7 +31,7 @@ Developers running a dev server or reading docs alongside a terminal session swi
 2. "Open browser pane" in the command palette splits the active pane and opens a browser pane with one tab.
 3. The page is drawn exactly inside the pane's content area. It follows the pane when splits are resized, the window is resized or maximized, or the display scale changes.
 4. When the pane's Warp tab is not visible, the page is not visible. Returning to the tab shows it again in place.
-5. Warp's command palette, menus, modals and tooltips always appear above the page, never under it.
+5. Warp's command palette, menus, modals and tooltips always appear above the page, never under it. While one covers the page, the page area is hidden.
 6. Typing in the URL field and pressing Enter:
    1. loads the input as typed when it is a URL with an `http`, `https`, `file`, `about` or `data` scheme;
    2. loads `localhost`, `*.localhost`, `127.0.0.1`, `0.0.0.0` and `[::1]` addresses over `http`;
@@ -47,8 +47,8 @@ Developers running a dev server or reading docs alongside a terminal session swi
 13. While the page has focus, Warp's pane-navigation and window shortcuts still work.
 14. Cookies and logins persist across restarts.
 15. Agent tools only reach tabs in browser panes, and each action happens in a tab the user can see.
-16. An agent opening a site that is not a local address (per 6.2) needs the user's approval.
-17. A modifier-click on a `localhost` link in the terminal opens it in a browser pane.
+16. Agent browser actions go through the agent's MCP permission settings, so by default the user approves each one. Profiles can allow the `warp-browser` MCP server to skip approval.
+17. `⌘`-clicking a link to a local address (per 6.2) in terminal output opens it in a browser pane. Other links open in the default browser as before.
 
 ## Success criteria
 
