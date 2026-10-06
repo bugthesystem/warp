@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# Frees disk space taken by builds: incremental caches and release bundles in this checkout's
+# target folder, in every worktree of it, and in $CARGO_TARGET_DIR. Shows what it would remove
+# and asks first.
+#
+# Usage: script/macos/clean_builds [--yes] [--worktrees]
+#   --yes        remove without asking
+#   --worktrees  also remove the whole target folder of every other worktree
+
+set -eo pipefail
+
+ASSUME_YES=0
+WHOLE_WORKTREES=0
+for arg in "$@"; do
+  case "$arg" in
+    --yes) ASSUME_YES=1 ;;
+    --worktrees) WHOLE_WORKTREES=1 ;;
+    *)
+      echo "Usage: script/macos/clean_builds [--yes] [--worktrees]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+targets=()
+while IFS= read -r worktree; do
+  [[ -d "$worktree/target" ]] && targets+=("$worktree/target")
+done < <(git -C "$ROOT" worktree list --porcelain | sed -n 's/^worktree //p')
+if [[ -n "$CARGO_TARGET_DIR" && -d "$CARGO_TARGET_DIR" ]]; then
+  targets+=("$CARGO_TARGET_DIR")
+fi
+
+if [[ ${#targets[@]} -eq 0 ]]; then
+  echo "No build folders found."
+  exit 0
+fi
+
+echo "Build folders:"
+for target in "${targets[@]}"; do
+  du -sh "$target" 2>/dev/null | sed 's/^/  /'
+done
+
+candidates=()
+for target in "${targets[@]}"; do
+  if [[ "$WHOLE_WORKTREES" == 1 && "$target" != "$ROOT/target" && "$target" != "$CARGO_TARGET_DIR" ]]; then
+    candidates+=("$target")
+    continue
+  fi
+  # Incremental caches only speed up the next debug build of the same code, and grow without
+  # bound across branches. Release bundles are rebuilt by every release.
+  while IFS= read -r dir; do
+    candidates+=("$dir")
+  done < <(find "$target" -maxdepth 3 -type d \( -name incremental -o -path '*/release-lto/bundle' \) 2>/dev/null)
+  [[ -d "$target/warped/Warped.app" ]] && candidates+=("$target/warped/Warped.app")
+done
+
+if [[ ${#candidates[@]} -eq 0 ]]; then
+  echo "Nothing to remove."
+  exit 0
+fi
+
+echo
+echo "Can be removed:"
+for dir in "${candidates[@]}"; do
+  du -sh "$dir" 2>/dev/null | sed 's/^/  /'
+done
+
+if [[ "$ASSUME_YES" != 1 ]]; then
+  echo
+  read -r -p "Remove these? [y/N] " answer
+  [[ "$answer" == [yY]* ]] || { echo "Nothing removed."; exit 0; }
+fi
+
+for dir in "${candidates[@]}"; do
+  rm -rf "$dir"
+done
+echo "Removed. Free space now:"
+df -h "$ROOT" | tail -1 | sed 's/^/  /'
