@@ -74,6 +74,20 @@ pub fn has_input_permission() -> bool {
     }
 }
 
+/// Whether the window is on the current desktop and not minimized, so input can reach it. A window
+/// covered by others still counts.
+pub fn is_on_current_desktop(window_id: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::is_on_current_desktop(window_id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window_id;
+        false
+    }
+}
+
 /// Shows the system prompt for the Accessibility permission, when macOS still offers it.
 pub fn request_input_permission() {
     #[cfg(target_os = "macos")]

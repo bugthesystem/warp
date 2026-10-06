@@ -422,10 +422,17 @@ impl PreviewAgent {
             Ok(events) => events,
             Err(message) => return Some(Err(message)),
         };
-        if matches!(preview.source, Source::Window(_))
-            && !warp_preview::window::has_input_permission()
-        {
-            return Some(Err(NEEDS_ACCESSIBILITY.to_owned()));
+        if let Source::Window(window) = &preview.source {
+            if !warp_preview::window::has_input_permission() {
+                return Some(Err(NEEDS_ACCESSIBILITY.to_owned()));
+            }
+            if !warp_preview::window::is_on_current_desktop(window.window_id) {
+                return Some(Err(format!(
+                    "{}'s window is minimized or on another desktop, so it can't take input. Ask \
+                     the user to move it to this desktop; it can stay behind Warp.",
+                    window.app_name
+                )));
+            }
         }
         for event in events {
             if !streams.send_input(id, event) {

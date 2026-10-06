@@ -12,6 +12,8 @@ use super::streams::{PreviewId, PreviewStreams};
 
 /// Shown when Playing needs the Accessibility permission. macOS shows its own prompt alongside.
 pub(super) const NEEDS_ACCESSIBILITY: &str = "Allow Warp in Accessibility to play windows";
+/// Shown when the window to play is minimized or on another desktop, where input can't reach it.
+pub(super) const NOT_ON_THIS_DESKTOP: &str = "Move the window to this desktop to play it";
 
 /// Switches `front` between Watching and Playing. Asks for the Accessibility permission a window
 /// needs to be played, and returns the notice to show while it is missing.
@@ -20,12 +22,21 @@ pub(super) fn set_playing<V: View>(
     playing: bool,
     ctx: &mut ViewContext<V>,
 ) -> Result<(), &'static str> {
-    let is_window = PreviewStreams::as_ref(ctx)
-        .get(front)
-        .is_some_and(|preview| matches!(preview.source, Source::Window(_)));
-    if playing && is_window && !warp_preview::window::has_input_permission() {
-        warp_preview::window::request_input_permission();
-        return Err(NEEDS_ACCESSIBILITY);
+    let window_id =
+        PreviewStreams::as_ref(ctx)
+            .get(front)
+            .and_then(|preview| match &preview.source {
+                Source::Window(window) => Some(window.window_id),
+                Source::Browser { .. } => None,
+            });
+    if let (true, Some(window_id)) = (playing, window_id) {
+        if !warp_preview::window::has_input_permission() {
+            warp_preview::window::request_input_permission();
+            return Err(NEEDS_ACCESSIBILITY);
+        }
+        if !warp_preview::window::is_on_current_desktop(window_id) {
+            return Err(NOT_ON_THIS_DESKTOP);
+        }
     }
     PreviewStreams::handle(ctx)
         .update(ctx, |streams, ctx| streams.set_playing(front, playing, ctx));
