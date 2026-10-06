@@ -68,5 +68,5 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 echo "Built $ZIP"
 shasum -a 256 "$ZIP"
 
-# The zip holds the release; the unzipped bundles take a few GB and are rebuilt every time.
-rm -rf "$APP" "target/$ARCH-apple-darwin/release-lto/bundle"
+# The zipped app is the release; the intermediate bundle takes a few GB and is rebuilt every time.
+rm -rf "target/$ARCH-apple-darwin/release-lto/bundle"
