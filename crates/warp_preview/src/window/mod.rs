@@ -2,6 +2,8 @@
 //! listed and capture is unsupported.
 
 #[cfg(target_os = "macos")]
+mod input_mac;
+#[cfg(target_os = "macos")]
 mod mac;
 
 use crate::WindowSource;
@@ -60,6 +62,28 @@ pub fn request_permission() {
 }
 
 /// Opens the system settings page where the user grants Screen Recording.
+/// Whether Warp may send input to other apps' windows (macOS Accessibility). Never prompts.
+pub fn has_input_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::has_input_permission()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Shows the system prompt for the Accessibility permission, when macOS still offers it.
+pub fn request_input_permission() {
+    #[cfg(target_os = "macos")]
+    mac::request_input_permission();
+}
+
+/// The settings page where the Accessibility permission is granted.
+pub const INPUT_PERMISSION_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
 pub const PERMISSION_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 

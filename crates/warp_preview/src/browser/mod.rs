@@ -4,6 +4,8 @@
 #[cfg(not(target_family = "wasm"))]
 mod cdp;
 #[cfg(not(target_family = "wasm"))]
+mod input;
+#[cfg(not(target_family = "wasm"))]
 mod install;
 #[cfg(not(target_family = "wasm"))]
 mod screencast;

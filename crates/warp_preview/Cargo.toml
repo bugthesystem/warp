@@ -27,10 +27,11 @@ zip = { version = "2.1", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
+computer_use.workspace = true
 objc2.workspace = true
 objc2-core-foundation.workspace = true
 objc2-core-graphics = { workspace = true, features = ["CGDataProvider", "CGImage", "CGWindow"] }
-objc2-foundation = { workspace = true, features = ["NSArray", "NSEnumerator", "NSError", "NSString"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSDictionary", "NSEnumerator", "NSError", "NSString", "NSValue"] }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
@@ -42,6 +43,7 @@ objc2-screen-capture-kit = { version = "0.3.2", default-features = false, featur
     "SCShareableContent",
     "SCStream",
 ] }
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use warp_preview::input::InputEvent;
 use warp_preview::{Environment, Rate, Source, Stream, StreamEvent};
 use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::image_cache::ImageType;
@@ -60,6 +61,8 @@ pub struct Preview {
     pub status: PreviewStatus,
     /// Size of the latest frame, in pixels.
     pub frame_size: Option<(u32, u32)>,
+    /// Whether the user's pointer and keys over the preview go to its source.
+    pub playing: bool,
     latest_jpeg: Option<Arc<[u8]>>,
     log: VecDeque<String>,
     rate: Rate,
@@ -206,6 +209,7 @@ impl PreviewStreams {
             title: None,
             status: PreviewStatus::Starting,
             frame_size: None,
+            playing: false,
             latest_jpeg: None,
             log: VecDeque::new(),
             rate: Rate::Paused,
@@ -227,6 +231,24 @@ impl PreviewStreams {
     pub fn close(&mut self, id: PreviewId, ctx: &mut ModelContext<Self>) {
         self.previews.retain(|preview| preview.id != id);
         ctx.notify();
+    }
+
+    pub fn set_playing(&mut self, id: PreviewId, playing: bool, ctx: &mut ModelContext<Self>) {
+        if let Some(preview) = self.get_mut(id) {
+            preview.playing = playing;
+            ctx.notify();
+        }
+    }
+
+    /// Delivers input to a preview's source. False when the preview is not running.
+    pub fn send_input(&self, id: PreviewId, event: InputEvent) -> bool {
+        match self.get(id).and_then(|preview| preview.stream.as_ref()) {
+            Some(stream) => {
+                stream.input(event);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Sets how often a preview updates, from how prominently it is shown.

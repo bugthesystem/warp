@@ -16,12 +16,14 @@ use objc2_core_graphics::{
     CGDataProvider, CGImage, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
     CGRequestScreenCaptureAccess,
 };
-use objc2_foundation::NSError;
+use objc2_foundation::{NSDictionary, NSError, NSNumber, NSString};
 use objc2_screen_capture_kit::{
     SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
 };
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::WindowEntry;
+use super::input_mac::{self, InputWorker};
 use crate::geometry::scale_within;
 use crate::stream::Control;
 use crate::{Error, Rate, Stream, StreamEvent, WindowSource, jpeg};
@@ -50,6 +52,28 @@ pub fn has_permission() -> bool {
 
 pub fn request_permission() {
     CGRequestScreenCaptureAccess();
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+}
+
+pub fn has_input_permission() -> bool {
+    // SAFETY: takes no arguments and only reads the process's trust state.
+    unsafe { AXIsProcessTrusted() }
+}
+
+pub fn request_input_permission() {
+    let key = NSString::from_str("AXTrustedCheckOptionPrompt");
+    let prompt = NSNumber::new_bool(true);
+    let options = NSDictionary::from_slices(&[&*key], &[&*prompt]);
+    // SAFETY: the options dictionary is toll-free bridged to the CFDictionary the call expects and
+    // outlives it.
+    unsafe {
+        AXIsProcessTrustedWithOptions(Retained::as_ptr(&options).cast());
+    }
 }
 
 /// Every window ScreenCaptureKit can capture, including minimized ones.
@@ -206,19 +230,34 @@ pub fn start_capture(
         .name("preview-window".to_owned())
         .spawn(move || {
             let filter = filter;
-            run(source.window_id, filter.0, rate, &control_rx, &events);
+            run(&source, filter.0, rate, &control_rx, &events);
         })
         .map_err(|err| Error::Other(err.to_string()))?;
     Ok(Stream::new(control_tx))
 }
 
+/// The window's size in pixels, which input positions are scaled to.
+fn pixel_size(filter: &SCContentFilter) -> Vector2F {
+    // SAFETY: property reads on a delivered filter.
+    unsafe {
+        let rect = filter.contentRect();
+        let scale = filter.pointPixelScale() as f64;
+        vec2f(
+            (rect.size.width * scale) as f32,
+            (rect.size.height * scale) as f32,
+        )
+    }
+}
+
 fn run(
-    window_id: u32,
+    source: &WindowSource,
     mut filter: Retained<SCContentFilter>,
     mut rate: Rate,
     control: &mpsc::Receiver<Control>,
     events: &async_channel::Sender<StreamEvent>,
 ) {
+    let window_id = source.window_id;
+    let mut input: Option<InputWorker> = None;
     let mut minimized = false;
     let mut next = Instant::now();
     loop {
@@ -240,6 +279,15 @@ fn run(
                 continue;
             }
             Ok(Control::Navigate(_) | Control::Resize(..)) => continue,
+            Ok(Control::Input(event)) => {
+                if input.is_none() {
+                    input = InputWorker::start(window_id, source.pid);
+                }
+                if let Some(input) = &input {
+                    input.send(input_mac::actions(&event, pixel_size(&filter)));
+                }
+                continue;
+            }
             Ok(Control::Stop) | Err(Some(())) => return,
             Err(None) => {}
         }

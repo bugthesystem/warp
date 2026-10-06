@@ -10,8 +10,12 @@ use warpui::elements::{
     OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius,
 };
 use warpui::prelude::DropShadow;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, BlurContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext,
+};
 
+use super::playing::{self, PlayingInput};
 use super::stage::{StageAction, StageMouseStates, StageOptions, render_stage};
 use super::streams::{PreviewId, PreviewStreams};
 use super::view::{AppApproval, save_screenshot};
@@ -101,6 +105,8 @@ pub struct PreviewPipView {
     agent_step: Option<String>,
     agent_step_generation: u64,
     approval: Option<AppApproval>,
+    focused: bool,
+    playing_input: PlayingInput,
 }
 
 impl PreviewPipView {
@@ -122,6 +128,8 @@ impl PreviewPipView {
             agent_step: None,
             agent_step_generation: 0,
             approval: None,
+            focused: false,
+            playing_input: PlayingInput::default(),
         }
     }
 
@@ -238,6 +246,7 @@ impl PreviewPipView {
         match action {
             StageAction::BringToFront(id) => {
                 self.front = *id;
+                self.playing_input = PlayingInput::default();
                 ctx.notify();
             }
             StageAction::Close(id) => {
@@ -278,6 +287,16 @@ impl PreviewPipView {
                 self.return_to_pane(ctx)
             }
             StageAction::ResolveApproval(decision) => self.resolve_approval(*decision, ctx),
+            StageAction::SetPlaying(playing) => {
+                self.playing_input = PlayingInput::default();
+                if let Err(notice) = playing::set_playing(self.front, *playing, ctx) {
+                    self.show_notice(notice, ctx);
+                }
+            }
+            StageAction::Input(input) => {
+                self.playing_input
+                    .forward(self.front, input, &self.position_id, ctx);
+            }
         }
     }
 
@@ -301,6 +320,20 @@ impl View for PreviewPipView {
         "PreviewPipView"
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.focused = true;
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.focused = false;
+            ctx.notify();
+        }
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let stage = render_stage(
             &self.cards,
@@ -309,7 +342,7 @@ impl View for PreviewPipView {
             StageOptions {
                 position_id: &self.position_id,
                 in_picture_in_picture: true,
-                show_cards: false,
+                focused: self.focused,
                 approval: self
                     .approval
                     .as_ref()

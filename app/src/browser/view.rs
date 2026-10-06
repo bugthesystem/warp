@@ -38,6 +38,7 @@ use crate::pane_group::pane::view::{self, HeaderContent};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
+use crate::ui_components::start_page;
 
 /// Title shown for a tab until its page reports one.
 const DEFAULT_TITLE: &str = "Browser";
@@ -63,8 +64,6 @@ const TAB_ICON_SIZE: f32 = 14.;
 const STATUS_ICON_SIZE: f32 = 16.;
 
 const CORNER_RADIUS: f32 = 6.;
-
-const NEW_TAB_PAGE_WIDTH: f32 = 560.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
@@ -955,11 +954,38 @@ impl BrowserView {
     /// agents opened, and other recent pages.
     fn render_new_tab_page(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
         let sections = BrowserHistoryModel::as_ref(app).sections(MAX_RECENTS);
         let mut mouse_states = self.recent_buttons.iter();
+        let mut children = vec![start_page::heading(
+            "New tab",
+            "Pages here sit beside your terminal, and agents can read and drive them with the \
+             browser tools. Type a URL or a search in the field above.",
+            appearance,
+        )];
 
-        let mut column = Flex::column().with_spacing(2.);
+        if !self.local_servers.is_empty() {
+            let rows = self
+                .local_servers
+                .iter()
+                .zip(&self.local_server_buttons)
+                .map(|(server, mouse_state)| {
+                    page_row(
+                        &server.url(),
+                        Some(&server.process),
+                        Icon::Globe,
+                        mouse_state,
+                        appearance,
+                    )
+                })
+                .collect();
+            children.push(start_page::section(
+                Icon::Terminal,
+                "Running on this machine",
+                rows,
+                None,
+                appearance,
+            ));
+        }
         let groups = [
             (Icon::Laptop, "Local apps", &sections.local_apps),
             (
@@ -969,73 +995,32 @@ impl BrowserView {
             ),
             (Icon::Clock, "Recent", &sections.recent),
         ];
-        let mut is_empty = self.local_servers.is_empty();
-        if !is_empty {
-            column.add_child(
-                Container::new(section_heading(
-                    Icon::Terminal,
-                    "Running on this machine",
-                    appearance,
-                ))
-                .with_margin_top(14.)
-                .with_margin_bottom(4.)
-                .finish(),
-            );
-            for (server, mouse_state) in self.local_servers.iter().zip(&self.local_server_buttons) {
-                column.add_child(history_row(
-                    &server.url(),
-                    Some(&server.process),
-                    Icon::Terminal,
-                    mouse_state,
-                    appearance,
-                ));
-            }
-        }
         for (icon, heading, entries) in groups {
             if entries.is_empty() {
                 continue;
             }
-            is_empty = false;
-            column.add_child(
-                Container::new(section_heading(icon, heading, appearance))
-                    .with_margin_top(14.)
-                    .with_margin_bottom(4.)
-                    .finish(),
-            );
-            for (entry, mouse_state) in entries.iter().zip(mouse_states.by_ref()) {
-                column.add_child(history_row(
-                    &entry.url,
-                    entry.title.as_deref(),
-                    icon,
-                    mouse_state,
-                    appearance,
-                ));
-            }
+            let rows = entries
+                .iter()
+                .zip(mouse_states.by_ref())
+                .map(|(entry, mouse_state)| {
+                    page_row(
+                        &entry.url,
+                        entry.title.as_deref(),
+                        icon,
+                        mouse_state,
+                        appearance,
+                    )
+                })
+                .collect();
+            children.push(start_page::section(icon, heading, rows, None, appearance));
         }
-        if is_empty {
-            column.add_child(
-                Text::new_inline(
-                    "Pages you and your agents visit appear here. Type a URL or search above.",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(theme.nonactive_ui_text_color().into())
-                .finish(),
-            );
+        if children.len() == 1 {
+            children.push(start_page::note(
+                "Pages you and your agents visit appear here.",
+                appearance,
+            ));
         }
-
-        Align::new(
-            Container::new(
-                ConstrainedBox::new(column.finish())
-                    .with_max_width(NEW_TAB_PAGE_WIDTH)
-                    .finish(),
-            )
-            .with_margin_top(32.)
-            .with_horizontal_padding(16.)
-            .finish(),
-        )
-        .top_center()
-        .finish()
+        start_page::page(children)
     }
 
     /// What the agent is doing, with controls to pause it, hand control back, or stop it.
@@ -1314,85 +1299,31 @@ impl BrowserView {
     }
 }
 
-fn section_heading(icon: Icon, heading: &str, appearance: &Appearance) -> Box<dyn Element> {
-    let color = appearance.theme().nonactive_ui_text_color();
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(6.)
-        .with_child(
-            ConstrainedBox::new(icon.to_warpui_icon(color).finish())
-                .with_width(TAB_ICON_SIZE)
-                .with_height(TAB_ICON_SIZE)
-                .finish(),
-        )
-        .with_child(
-            Text::new_inline(
-                heading.to_owned(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(color.into())
-            .finish(),
-        )
-        .finish()
-}
-
-/// A clickable page on the new-tab page.
-fn history_row(
+/// A page on the new-tab page: its title, or its short URL when it has none, with the short URL
+/// after a title.
+fn page_row(
     url: &str,
     title: Option<&str>,
     icon: Icon,
     mouse_state: &MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let font_family = appearance.ui_font_family();
-    let font_size = appearance.ui_font_size();
     let short_url = warp_browser::display_url(url);
-    let title = title.map_or_else(|| short_url.clone(), str::to_owned);
-    let url = url.to_owned();
-    Hoverable::new(mouse_state.clone(), move |state| {
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.)
-            .with_child(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(theme.nonactive_ui_text_color())
-                        .finish(),
-                )
-                .with_width(TAB_ICON_SIZE)
-                .with_height(TAB_ICON_SIZE)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(title, font_family, font_size)
-                        .with_color(theme.active_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(short_url, font_family, font_size)
-                        .with_color(theme.nonactive_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        let mut container = Container::new(row.finish())
-            .with_horizontal_padding(10.)
-            .with_vertical_padding(6.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS)));
-        if state.is_hovered() {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::OpenUrl(url.clone())))
-    .finish()
+    let (title, detail) = match title {
+        Some(title) if !title.is_empty() => (title, Some(short_url.as_str())),
+        _ => (short_url.as_str(), None),
+    };
+    start_page::row(
+        start_page::RowContent {
+            icon,
+            title,
+            detail,
+            hover_hint: "Open",
+        },
+        mouse_state,
+        BrowserViewAction::OpenUrl(url.to_owned()),
+        appearance,
+    )
 }
 
 /// Whether a menu, modal or other overlay drew over `rect` in the last frame. The web view sits
@@ -1562,7 +1493,7 @@ fn screenshot_path() -> PathBuf {
 
 fn reveal_in_finder(path: &Path) {
     #[cfg(target_os = "macos")]
-    if let Err(err) = std::process::Command::new("open")
+    if let Err(err) = command::blocking::Command::new("open")
         .arg("-R")
         .arg(path)
         .spawn()

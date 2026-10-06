@@ -54,3 +54,19 @@ fn scale_within_keeps_small_sizes() {
     assert_eq!(scale_within((800, 600), 1600), (800, 600));
     assert_eq!(scale_within((0, 0), 10), (0, 0));
 }
+
+#[test]
+fn to_fraction_measures_from_the_picture_not_the_bars() {
+    let area = RectF::new(vec2f(0., 0.), vec2f(200., 200.));
+    let content = vec2f(400., 200.);
+    // The picture is 200x100, centered with bars above and below.
+    assert_eq!(
+        to_fraction(vec2f(100., 75.), content, area, false),
+        Some(vec2f(0.5, 0.25))
+    );
+    assert_eq!(to_fraction(vec2f(100., 10.), content, area, false), None);
+    assert_eq!(
+        to_fraction(vec2f(250., 10.), content, area, true),
+        Some(vec2f(1., 0.))
+    );
+}

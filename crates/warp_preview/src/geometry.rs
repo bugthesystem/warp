@@ -29,6 +29,28 @@ pub fn to_source(point: Vector2F, content: Vector2F, area: RectF) -> Option<Vect
     ))
 }
 
+/// Maps `point`, in the same space as `area`, to a fraction of the picture of `content` drawn
+/// letterboxed in `area`: 0 to 1 on each axis from its top left. Points outside the picture are
+/// `None`, or clamped to its edge when `clamp` is set, as a drag that leaves the picture is.
+pub fn to_fraction(
+    point: Vector2F,
+    content: Vector2F,
+    area: RectF,
+    clamp: bool,
+) -> Option<Vector2F> {
+    let picture = letterbox(content, area);
+    if picture.width() <= 0. || picture.height() <= 0. {
+        return None;
+    }
+    let fraction = (point - picture.origin()) / picture.size();
+    let inside = (0. ..=1.).contains(&fraction.x()) && (0. ..=1.).contains(&fraction.y());
+    match (inside, clamp) {
+        (true, _) => Some(fraction),
+        (false, true) => Some(fraction.max(Vector2F::zero()).min(Vector2F::splat(1.))),
+        (false, false) => None,
+    }
+}
+
 /// The size to capture a source of `size` at so that neither side exceeds `max_side`, keeping its
 /// aspect ratio. Sizes already within the limit are returned unchanged.
 pub fn scale_within(size: (u32, u32), max_side: u32) -> (u32, u32) {

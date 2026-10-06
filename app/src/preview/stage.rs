@@ -1,19 +1,28 @@
 //! What a preview pane and the picture-in-picture window both show: the front preview, the other
-//! previews as live cards beside it, and a thin floating bar of controls over the picture.
+//! previews as a pile of live cards over its corner, and a thin floating bar of controls over the
+//! picture.
+
+use std::time::Duration;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::appearance::Appearance;
+use warp_preview::Source;
+use warp_preview::input::{Modifiers, PointerButton};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    Stack, Text,
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, Empty, EventDispatchMode, EventHandler, Flex, Hoverable, Image,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, Stack, Text,
 };
+use warpui::event::ModifiersState;
+use warpui::fonts::FamilyId;
 use warpui::image_cache::CacheOption;
+use warpui::keymap::Keystroke;
+use warpui::scene::DropShadow;
 use warpui::ui_components::components::UiComponent;
-use warpui::{Action, AppContext, Element, SingletonEntity};
+use warpui::{Action, AppContext, Element, EventContext, SingletonEntity};
 
 use super::streams::{ChromiumState, Preview, PreviewId, PreviewStatus, PreviewStreams};
 use crate::browser::AgentApproval;
@@ -23,66 +32,51 @@ use crate::ui_components::icons::Icon;
 const BAR_HEIGHT: f32 = 30.;
 const BAR_ICON_SIZE: f32 = 15.;
 const BAR_BUTTON_WIDTH: f32 = 28.;
-/// Width of the column of cards beside the front preview.
-const CARD_WIDTH: f32 = 168.;
-const CARD_PICTURE_HEIGHT: f32 = 94.;
 const PICTURE_CORNER_RADIUS: f32 = 10.;
+/// How many cards the collapsed pile draws; the rest are counted on its badge.
+const PILE_DEPTH: usize = 3;
+/// How far each card in the collapsed pile sits up and to the left of the one in front of it.
+const PILE_STEP: f32 = 7.;
+/// Keeps the pile fanned out while the pointer crosses the gaps between cards.
+const PILE_HOVER_OUT_DELAY: Duration = Duration::from_millis(250);
 
-/// The stage keeps one dark look in both themes, since it shows another program's pixels.
-const STAGE_BACKGROUND: ColorU = ColorU {
-    r: 12,
-    g: 17,
-    b: 16,
-    a: 255,
-};
-const GLASS: ColorU = ColorU {
-    r: 26,
-    g: 34,
-    b: 32,
-    a: 220,
-};
-const GLASS_LINE: ColorU = ColorU {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 44,
-};
-const GLASS_HOVER: ColorU = ColorU {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 34,
-};
-const STAGE_TEXT: ColorU = ColorU {
-    r: 232,
-    g: 239,
-    b: 237,
-    a: 255,
-};
-const STAGE_MUTED: ColorU = ColorU {
-    r: 169,
-    g: 182,
-    b: 178,
-    a: 255,
-};
-const DISABLED: ColorU = ColorU {
-    r: 169,
-    g: 182,
-    b: 178,
-    a: 110,
-};
-const LIT: ColorU = ColorU {
-    r: 15,
-    g: 138,
-    b: 121,
-    a: 255,
-};
-const AGENT: ColorU = ColorU {
-    r: 240,
-    g: 147,
-    b: 90,
-    a: 255,
-};
+/// The stage's colors, from the theme.
+#[derive(Clone, Copy)]
+struct Palette {
+    background: ColorU,
+    /// The translucent surface the controls float on over the picture.
+    glass: ColorU,
+    line: ColorU,
+    hover: ColorU,
+    text: ColorU,
+    muted: ColorU,
+    /// A switched-on control, and the text on it.
+    lit: ColorU,
+    on_lit: ColorU,
+    /// Marks an agent acting on the preview.
+    agent: ColorU,
+}
+
+impl Palette {
+    fn new(appearance: &Appearance) -> Self {
+        let theme = appearance.theme();
+        let lit = theme.accent().into_solid();
+        Self {
+            background: theme.background().into_solid(),
+            glass: ColorU {
+                a: 235,
+                ..theme.surface_2().into_solid()
+            },
+            line: theme.outline().into_solid(),
+            hover: theme.surface_3().into_solid(),
+            text: theme.active_ui_text_color().into_solid(),
+            muted: theme.nonactive_ui_text_color().into_solid(),
+            lit,
+            on_lit: theme.font_color(lit).into_solid(),
+            agent: theme.ui_warning_color(),
+        }
+    }
+}
 
 /// Something the user did on the stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,8 +91,42 @@ pub enum StageAction {
     TogglePictureInPicture,
     AddPreview,
     ResolveApproval(AgentApproval),
+    /// Switches the front preview between Watching and Playing.
+    SetPlaying(bool),
+    /// Pointer or keyboard input on the front preview while it is playing.
+    Input(StageInput),
 }
 
+/// The user's input on a playing preview. Positions are window points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StageInput {
+    Down {
+        at: (i32, i32),
+        button: PointerButton,
+        modifiers: Modifiers,
+    },
+    Up {
+        at: (i32, i32),
+    },
+    Drag {
+        at: (i32, i32),
+    },
+    /// The pointer moved over the picture with no button held.
+    Hover {
+        at: (i32, i32),
+    },
+    /// A wheel or trackpad scroll, in points as AppKit reports them.
+    Scroll {
+        delta: (i32, i32),
+    },
+    Key(Keystroke),
+}
+
+impl StageInput {
+    pub fn point(position: Vector2F) -> (i32, i32) {
+        (position.x().round() as i32, position.y().round() as i32)
+    }
+}
 /// Mouse state for everything clickable on a stage. Owned by the view showing the stage.
 #[derive(Default)]
 pub struct StageMouseStates {
@@ -112,6 +140,7 @@ pub struct StageMouseStates {
     approve_once: MouseStateHandle,
     approve_always: MouseStateHandle,
     deny: MouseStateHandle,
+    pile: MouseStateHandle,
     cards: Vec<(MouseStateHandle, MouseStateHandle)>,
 }
 
@@ -127,10 +156,11 @@ impl StageMouseStates {
 /// What a stage shows besides its previews.
 pub struct StageOptions<'a> {
     pub position_id: &'a str,
-    /// Whether the stage is the picture-in-picture window, which changes the pop-out button.
+    /// Whether the stage is the picture-in-picture window, which changes the pop-out button and
+    /// shrinks the pile.
     pub in_picture_in_picture: bool,
-    /// Whether the previews behind the front one show as cards beside it.
-    pub show_cards: bool,
+    /// Whether the view showing the stage has keyboard focus, so a playing preview takes keys.
+    pub focused: bool,
     /// An app an agent is waiting for the user to approve.
     pub approval: Option<&'a str>,
     /// What an agent is doing with the front preview right now.
@@ -148,21 +178,29 @@ pub fn render_stage<A: Action + Clone>(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
+    let palette = Palette::new(appearance);
     let streams = PreviewStreams::as_ref(app);
     let front_preview = streams.get(front);
+    let playing = front_preview.is_some_and(|preview| preview.playing);
 
-    let mut picture = Stack::new().with_child(
-        // Saved for a single frame so the stage counts as hidden whenever it is not drawn,
-        // which pauses its previews.
-        SavePosition::new(
-            render_picture(front_preview, streams, mouse_states, wrap, appearance),
-            options.position_id,
-        )
-        .for_single_frame()
-        .finish(),
-    );
+    // Saved for a single frame so the stage counts as hidden whenever it is not drawn, which
+    // pauses its previews.
+    let mut picture_element = SavePosition::new(
+        render_picture(front_preview, streams, mouse_states, wrap, appearance),
+        options.position_id,
+    )
+    .for_single_frame()
+    .finish();
+    if playing {
+        picture_element = forward_input(picture_element, options.focused, wrap);
+    }
+    // The controls over the picture take their own clicks; in the default broadcast mode a click
+    // on them would also reach a playing preview underneath.
+    let mut picture = Stack::new()
+        .with_event_dispatch_mode(EventDispatchMode::Waterfall)
+        .with_child(picture_element);
     picture.add_positioned_child(
-        render_badge(options.agent_step, appearance),
+        render_badge(options.agent_step, playing, appearance),
         OffsetPositioning::offset_from_parent(
             vec2f(-12., 12.),
             ParentOffsetBounds::ParentByPosition,
@@ -171,7 +209,7 @@ pub fn render_stage<A: Action + Clone>(
         ),
     );
     picture.add_positioned_child(
-        render_bar(&options, mouse_states, wrap, appearance),
+        render_bar(&options, front_preview, mouse_states, wrap, appearance),
         OffsetPositioning::offset_from_parent(
             vec2f(0., -12.),
             ParentOffsetBounds::ParentByPosition,
@@ -179,6 +217,22 @@ pub fn render_stage<A: Action + Clone>(
             ChildAnchor::BottomMiddle,
         ),
     );
+    if cards.len() > 1 {
+        let size = if options.in_picture_in_picture {
+            PileSize::SMALL
+        } else {
+            PileSize::REGULAR
+        };
+        picture.add_positioned_child(
+            render_pile(cards, front, size, streams, mouse_states, wrap, appearance),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-12., -12.),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::BottomRight,
+            ),
+        );
+    }
     if let Some(app_name) = options.approval {
         picture.add_positioned_child(
             render_approval(app_name, mouse_states, wrap, appearance),
@@ -193,23 +247,10 @@ pub fn render_stage<A: Action + Clone>(
 
     let mut picture = Container::new(picture.finish()).with_uniform_padding(10.);
     if options.agent_step.is_some() {
-        picture = picture.with_border(Border::all(2.).with_border_fill(AGENT));
+        picture = picture.with_border(Border::all(2.).with_border_fill(palette.agent));
     }
-    let mut row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(Expanded::new(1., picture.finish()).finish());
-    if options.show_cards && cards.len() > 1 {
-        row.add_child(render_cards(
-            cards,
-            front,
-            streams,
-            mouse_states,
-            wrap,
-            appearance,
-        ));
-    }
-    Container::new(row.finish())
-        .with_background(STAGE_BACKGROUND)
+    Container::new(picture.finish())
+        .with_background(palette.background)
         .finish()
 }
 
@@ -251,6 +292,93 @@ fn frame_image_from(asset: AssetSource, opacity: f32) -> Box<dyn Element> {
         .finish()
 }
 
+/// Sends the user's pointer and, while `focused`, keys over `picture` to the front preview.
+fn forward_input<A: Action + Clone>(
+    picture: Box<dyn Element>,
+    focused: bool,
+    wrap: fn(StageAction) -> A,
+) -> Box<dyn Element> {
+    let send = move |ctx: &mut EventContext, input: StageInput| {
+        ctx.dispatch_typed_action(wrap(StageAction::Input(input)));
+        DispatchEventResult::StopPropagation
+    };
+    let modifiers = |state: &ModifiersState| Modifiers {
+        cmd: state.cmd,
+        shift: state.shift,
+        alt: state.alt,
+        ctrl: state.ctrl,
+    };
+    let mut handler = EventHandler::new(picture)
+        .on_left_mouse_down(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            )
+        })
+        .on_left_mouse_up(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Up {
+                    at: StageInput::point(position),
+                },
+            )
+        })
+        .on_mouse_dragged(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Drag {
+                    at: StageInput::point(position),
+                },
+            )
+        })
+        .on_right_mouse_down(move |ctx, _, position, state| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Right,
+                    modifiers: modifiers(state),
+                },
+            )
+        })
+        .on_middle_mouse_down(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Middle,
+                    modifiers: Modifiers::default(),
+                },
+            )
+        })
+        .on_mouse_in(
+            move |ctx, _, position| {
+                ctx.dispatch_typed_action(wrap(StageAction::Input(StageInput::Hover {
+                    at: StageInput::point(position),
+                })));
+                DispatchEventResult::PropagateToParent
+            },
+            None,
+        )
+        .on_scroll_wheel(move |ctx, _, delta, _| {
+            send(
+                ctx,
+                StageInput::Scroll {
+                    delta: StageInput::point(delta),
+                },
+            )
+        });
+    if focused {
+        handler = handler
+            .on_keydown(move |ctx, _, keystroke| send(ctx, StageInput::Key(keystroke.clone())));
+    }
+    handler.finish()
+}
+
 /// What to show over or instead of the picture, when the preview is not simply live.
 fn status_message<A: Action + Clone>(
     preview: &Preview,
@@ -259,6 +387,7 @@ fn status_message<A: Action + Clone>(
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Option<Box<dyn Element>> {
+    let palette = Palette::new(appearance);
     let id = preview.id;
     let (text, buttons): (String, Vec<(&str, StageAction)>) = match &preview.status {
         PreviewStatus::Live => return None,
@@ -302,7 +431,7 @@ fn status_message<A: Action + Clone>(
         .with_child(
             ConstrainedBox::new(
                 Text::new(text, appearance.ui_font_family(), appearance.ui_font_size())
-                    .with_color(STAGE_TEXT)
+                    .with_color(palette.text)
                     .finish(),
             )
             .with_max_width(360.)
@@ -328,17 +457,23 @@ fn status_message<A: Action + Clone>(
     Some(
         Container::new(column.finish())
             .with_uniform_padding(16.)
-            .with_background(GLASS)
+            .with_background(palette.glass)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
             .finish(),
     )
 }
 
-/// The "Watching" badge, or what an agent is doing while it acts.
-fn render_badge(agent_step: Option<&str>, appearance: &Appearance) -> Box<dyn Element> {
-    let (dot, label) = match agent_step {
-        Some(step) => (AGENT, step.to_owned()),
-        None => (LIT, "Watching".to_owned()),
+/// "Watching" or "Playing", or what an agent is doing while it acts.
+fn render_badge(
+    agent_step: Option<&str>,
+    playing: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
+    let (dot, label) = match (agent_step, playing) {
+        (Some(step), _) => (palette.agent, step.to_owned()),
+        (None, true) => (palette.lit, "Playing".to_owned()),
+        (None, false) => (palette.muted, "Watching".to_owned()),
     };
     Container::new(
         Flex::row()
@@ -357,15 +492,15 @@ fn render_badge(agent_step: Option<&str>, appearance: &Appearance) -> Box<dyn El
             )
             .with_child(
                 Text::new_inline(label, appearance.ui_font_family(), 11.5)
-                    .with_color(STAGE_TEXT)
+                    .with_color(palette.text)
                     .finish(),
             )
             .finish(),
     )
     .with_horizontal_padding(10.)
     .with_vertical_padding(3.)
-    .with_background(GLASS)
-    .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+    .with_background(palette.glass)
+    .with_border(Border::all(1.).with_border_fill(palette.line))
     .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
     .finish()
 }
@@ -373,33 +508,49 @@ fn render_badge(agent_step: Option<&str>, appearance: &Appearance) -> Box<dyn El
 /// The thin floating bar of icon buttons over the bottom of the picture.
 fn render_bar<A: Action + Clone>(
     options: &StageOptions<'_>,
+    front: Option<&Preview>,
     mouse_states: &StageMouseStates,
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
+    let playing = front.is_some_and(|preview| preview.playing);
+    let lit_when = |lit: bool| {
+        if lit {
+            BarButtonState::Lit
+        } else {
+            BarButtonState::Normal
+        }
+    };
+    let play_tip = match front.map(|preview| &preview.source) {
+        Some(Source::Window(_)) => {
+            "Playing: your pointer and keys go to the window, which stays behind Warp"
+        }
+        Some(Source::Browser { .. }) | None => "Playing: your pointer and keys go to the page",
+    };
     let switch = Container::new(
         Flex::row()
             .with_spacing(1.)
             .with_child(bar_button(
                 Icon::Eye,
                 "Watching: your input stays in Warp",
-                BarButtonState::Lit,
+                lit_when(!playing),
                 &mouse_states.watch,
-                None::<A>,
+                Some(wrap(StageAction::SetPlaying(false))),
                 appearance,
             ))
             .with_child(bar_button(
                 Icon::Hand,
-                "Control with pointer and keys: coming next",
-                BarButtonState::Disabled,
+                play_tip,
+                lit_when(playing),
                 &mouse_states.control,
-                None::<A>,
+                Some(wrap(StageAction::SetPlaying(true))),
                 appearance,
             ))
             .finish(),
     )
     .with_uniform_padding(1.)
-    .with_background(ColorU::new(0, 0, 0, 97))
+    .with_background(appearance.theme().dark_overlay())
     .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
     .finish();
 
@@ -412,7 +563,7 @@ fn render_bar<A: Action + Clone>(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(1.)
         .with_child(switch)
-        .with_child(separator())
+        .with_child(separator(palette))
         .with_child(bar_button(
             Icon::Image,
             "Screenshot: save and copy the picture",
@@ -441,7 +592,7 @@ fn render_bar<A: Action + Clone>(
         bar.add_child(
             Container::new(
                 Text::new_inline(notice.to_owned(), appearance.ui_font_family(), 11.5)
-                    .with_color(STAGE_TEXT)
+                    .with_color(palette.text)
                     .finish(),
             )
             .with_horizontal_padding(8.)
@@ -451,8 +602,8 @@ fn render_bar<A: Action + Clone>(
     ConstrainedBox::new(
         Container::new(bar.finish())
             .with_uniform_padding(3.)
-            .with_background(GLASS)
-            .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+            .with_background(palette.glass)
+            .with_border(Border::all(1.).with_border_fill(palette.line))
             .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
             .finish(),
     )
@@ -460,11 +611,11 @@ fn render_bar<A: Action + Clone>(
     .finish()
 }
 
-fn separator() -> Box<dyn Element> {
+fn separator(palette: Palette) -> Box<dyn Element> {
     Container::new(
         ConstrainedBox::new(
             Container::new(Empty::new().finish())
-                .with_background(GLASS_LINE)
+                .with_background(palette.line)
                 .finish(),
         )
         .with_width(1.)
@@ -479,7 +630,6 @@ fn separator() -> Box<dyn Element> {
 enum BarButtonState {
     Normal,
     Lit,
-    Disabled,
 }
 
 /// An icon button in the bar. Its tooltip appears above it right away, since the bar has no
@@ -492,16 +642,17 @@ fn bar_button<A: Action + Clone>(
     action: Option<A>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
     let ui_builder = appearance.ui_builder().clone();
     let hoverable = Hoverable::new(mouse_state.clone(), move |mouse| {
         let color = match state {
-            BarButtonState::Normal | BarButtonState::Lit => STAGE_TEXT,
-            BarButtonState::Disabled => DISABLED,
+            BarButtonState::Lit => palette.on_lit,
+            BarButtonState::Normal => palette.text,
         };
         let background = match state {
-            BarButtonState::Lit => Some(LIT),
-            BarButtonState::Normal if mouse.is_hovered() => Some(GLASS_HOVER),
-            BarButtonState::Normal | BarButtonState::Disabled => None,
+            BarButtonState::Lit => Some(palette.lit),
+            BarButtonState::Normal if mouse.is_hovered() => Some(palette.hover),
+            BarButtonState::Normal => None,
         };
         let mut button = Container::new(
             Align::new(
@@ -550,24 +701,29 @@ fn pill_button<A: Action + Clone>(
     action: A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
     let label = label.to_owned();
     let font_family = appearance.ui_font_family();
     let font_size = appearance.ui_font_size();
     Hoverable::new(mouse_state.clone(), move |mouse| {
         let background = match (primary, mouse.is_hovered()) {
-            (true, _) => LIT,
-            (false, true) => GLASS_HOVER,
+            (true, _) => palette.lit,
+            (false, true) => palette.hover,
             (false, false) => ColorU::transparent_black(),
         };
         Container::new(
             Text::new_inline(label.clone(), font_family, font_size)
-                .with_color(STAGE_TEXT)
+                .with_color(palette.text)
                 .finish(),
         )
         .with_horizontal_padding(12.)
         .with_vertical_padding(4.)
         .with_background(background)
-        .with_border(Border::all(1.).with_border_fill(if primary { LIT } else { GLASS_LINE }))
+        .with_border(Border::all(1.).with_border_fill(if primary {
+            palette.lit
+        } else {
+            palette.line
+        }))
         .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
         .finish()
     })
@@ -582,6 +738,7 @@ fn render_approval<A: Action + Clone>(
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
     let text = format!(
         "An agent wants to watch {app_name}. It will see this window and its log, but can't \
          click or type in it."
@@ -592,7 +749,7 @@ fn render_approval<A: Action + Clone>(
             .with_child(
                 ConstrainedBox::new(
                     Text::new(text, appearance.ui_font_family(), appearance.ui_font_size())
-                        .with_color(STAGE_TEXT)
+                        .with_color(palette.text)
                         .finish(),
                 )
                 .with_max_width(380.)
@@ -627,88 +784,202 @@ fn render_approval<A: Action + Clone>(
             .finish(),
     )
     .with_uniform_padding(14.)
-    .with_background(GLASS)
-    .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+    .with_background(palette.glass)
+    .with_border(Border::all(1.).with_border_fill(palette.line))
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
     .finish()
 }
 
-/// The previews behind the front one, as small live cards. Clicking one brings it to the front.
-fn render_cards<A: Action + Clone>(
+/// Sizes of the pile's cards: collapsed thumbnails and fanned-out cards.
+#[derive(Clone, Copy)]
+struct PileSize {
+    thumbnail: (f32, f32),
+    card: (f32, f32),
+}
+
+impl PileSize {
+    const REGULAR: Self = Self {
+        thumbnail: (112., 63.),
+        card: (152., 86.),
+    };
+    const SMALL: Self = Self {
+        thumbnail: (72., 41.),
+        card: (104., 59.),
+    };
+}
+
+/// The previews behind the front one, piled up over the picture's corner. Hovering the pile fans
+/// it out into a row of cards; clicking a card brings it to the front.
+fn render_pile<A: Action + Clone>(
     cards: &[PreviewId],
     front: PreviewId,
+    size: PileSize,
     streams: &PreviewStreams,
     mouse_states: &StageMouseStates,
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let mut column = Flex::column()
-        .with_spacing(8.)
-        .with_main_axis_size(MainAxisSize::Min)
-        .with_main_axis_alignment(MainAxisAlignment::Start);
-    for (id, (card_state, close_state)) in cards.iter().zip(&mouse_states.cards) {
-        let Some(preview) = streams.get(*id) else {
-            continue;
-        };
-        column.add_child(render_card(
-            preview,
-            *id == front,
-            card_state,
-            close_state,
-            wrap,
-            appearance,
-        ));
+    let behind: Vec<(&Preview, &(MouseStateHandle, MouseStateHandle))> = cards
+        .iter()
+        .zip(&mouse_states.cards)
+        .filter(|(id, _)| **id != front)
+        .filter_map(|(id, states)| Some((streams.get(*id)?, states)))
+        .collect();
+    if behind.is_empty() {
+        return Empty::new().finish();
     }
-    ConstrainedBox::new(
-        Container::new(column.finish())
-            .with_uniform_padding(10.)
-            .with_border(Border::left(1.).with_border_fill(GLASS_LINE))
-            .finish(),
-    )
-    .with_width(CARD_WIDTH + 20.)
+
+    let font_family = appearance.ui_font_family();
+    Hoverable::new(mouse_states.pile.clone(), |mouse| {
+        if mouse.is_hovered() {
+            return glass_tray(
+                Flex::row()
+                    .with_spacing(6.)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_children(behind.iter().map(|(preview, (card_state, close_state))| {
+                        render_card(preview, size, card_state, close_state, wrap, appearance)
+                    }))
+                    .finish(),
+                Palette::new(appearance),
+            );
+        }
+        let thumbnails: Vec<Option<AssetSource>> = behind
+            .iter()
+            .skip(behind.len().saturating_sub(PILE_DEPTH))
+            .map(|(preview, _)| preview.frame_size.map(|_| preview.frame_asset()))
+            .collect();
+        let hidden_count = behind.len().saturating_sub(PILE_DEPTH);
+        render_collapsed_pile(
+            &thumbnails,
+            hidden_count,
+            size,
+            font_family,
+            Palette::new(appearance),
+        )
+    })
+    .with_hover_out_delay(PILE_HOVER_OUT_DELAY)
     .finish()
+}
+
+/// Up to [`PILE_DEPTH`] thumbnails stacked with a small offset, the newest in front.
+fn render_collapsed_pile(
+    thumbnails: &[Option<AssetSource>],
+    hidden_count: usize,
+    size: PileSize,
+    font_family: FamilyId,
+    palette: Palette,
+) -> Box<dyn Element> {
+    let (width, height) = size.thumbnail;
+    let depth = thumbnails.len().saturating_sub(1) as f32 * PILE_STEP;
+    let mut pile = Stack::new().with_child(
+        ConstrainedBox::new(Empty::new().finish())
+            .with_width(width + depth)
+            .with_height(height + depth)
+            .finish(),
+    );
+    for (index, asset) in thumbnails.iter().enumerate() {
+        let picture = match asset {
+            Some(asset) => frame_image_from(asset.clone(), 1.),
+            None => Empty::new().finish(),
+        };
+        let thumbnail = Container::new(
+            ConstrainedBox::new(picture)
+                .with_width(width)
+                .with_height(height)
+                .finish(),
+        )
+        .with_background(palette.background)
+        .with_border(Border::all(1.).with_border_fill(palette.line))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_drop_shadow(DropShadow::default())
+        .finish();
+        let offset = index as f32 * PILE_STEP;
+        pile.add_positioned_child(
+            thumbnail,
+            OffsetPositioning::offset_from_parent(
+                vec2f(offset, offset),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::TopLeft,
+                ChildAnchor::TopLeft,
+            ),
+        );
+    }
+    if hidden_count > 0 {
+        pile.add_positioned_child(
+            Container::new(
+                Text::new_inline(format!("+{hidden_count}"), font_family, 11.)
+                    .with_color(palette.text)
+                    .finish(),
+            )
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(1.)
+            .with_background(palette.glass)
+            .with_border(Border::all(1.).with_border_fill(palette.line))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-4., -4.),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::BottomRight,
+            ),
+        );
+    }
+    pile.finish()
+}
+
+fn glass_tray(child: Box<dyn Element>, palette: Palette) -> Box<dyn Element> {
+    Container::new(child)
+        .with_uniform_padding(6.)
+        .with_background(palette.glass)
+        .with_border(Border::all(1.).with_border_fill(palette.line))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
+        .with_drop_shadow(DropShadow::default())
+        .finish()
 }
 
 fn render_card<A: Action + Clone>(
     preview: &Preview,
-    is_front: bool,
+    size: PileSize,
     card_state: &MouseStateHandle,
     close_state: &MouseStateHandle,
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let palette = Palette::new(appearance);
     let id = preview.id;
     let label = preview.label();
     let asset = preview.frame_size.map(|_| preview.frame_asset());
     let font_family = appearance.ui_font_family();
+    let (width, height) = size.card;
     let card = Hoverable::new(card_state.clone(), move |mouse| {
         let picture = match &asset {
             Some(asset) => frame_image_from(asset.clone(), 1.),
             None => Empty::new().finish(),
         };
-        let border = if is_front || mouse.is_hovered() {
-            LIT
+        let (border, text) = if mouse.is_hovered() {
+            (palette.lit, palette.text)
         } else {
-            GLASS_LINE
+            (palette.line, palette.muted)
         };
-        Container::new(
-            Flex::column()
-                .with_spacing(4.)
-                .with_child(
-                    ConstrainedBox::new(picture)
-                        .with_height(CARD_PICTURE_HEIGHT)
-                        .finish(),
-                )
-                .with_child(
-                    Text::new_inline(label.clone(), font_family, 11.5)
-                        .with_color(if is_front { STAGE_TEXT } else { STAGE_MUTED })
-                        .finish(),
-                )
-                .finish(),
+        ConstrainedBox::new(
+            Container::new(
+                Flex::column()
+                    .with_spacing(4.)
+                    .with_child(ConstrainedBox::new(picture).with_height(height).finish())
+                    .with_child(
+                        Text::new_inline(label.clone(), font_family, 11.)
+                            .with_color(text)
+                            .finish(),
+                    )
+                    .finish(),
+            )
+            .with_uniform_padding(4.)
+            .with_border(Border::all(1.).with_border_fill(border))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .finish(),
         )
-        .with_uniform_padding(4.)
-        .with_border(Border::all(1.).with_border_fill(border))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_width(width)
         .finish()
     })
     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(wrap(StageAction::BringToFront(id))))
