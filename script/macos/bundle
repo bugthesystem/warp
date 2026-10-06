@@ -434,7 +434,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     WARP_SCHEME_NAME="warposs"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
-    FEATURES="release_bundle,extern_plist"
+    FEATURES="${FEATURES//,cocoa_sentry/}"
 fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
