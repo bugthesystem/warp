@@ -2160,6 +2160,28 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| ContextFlag::NetworkLogConsole.is_enabled())]);
 
     app.register_editable_bindings([EditableBinding::new(
+        "workspace:open_browser_pane",
+        "Open browser pane",
+        WorkspaceAction::OpenBrowserPane { url: None },
+    )
+    .with_mac_key_binding("cmd-shift-B")
+    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:set_up_claude_code_browser_tools",
+        "Set up browser tools for Claude Code",
+        WorkspaceAction::SetUpClaudeCodeBrowserTools,
+    )
+    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:toggle_browser_agent_auto_approve",
+        "Toggle browser agent auto-approve",
+        WorkspaceAction::ToggleBrowserAgentAutoApprove,
+    )
+    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+
+    app.register_editable_bindings([EditableBinding::new(
         "input:clear_screen",
         "Clear screen",
         InputAction::ClearScreen,

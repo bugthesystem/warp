@@ -368,6 +368,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
     BOOL _leftMouseDownStartedInNativeWindowChrome;
+    BOOL _leftMouseDownStartedInChildView;
 }
 
 @synthesize testMode;
@@ -467,9 +468,19 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return NO;
 }
 
+// Whether the event is over a native view embedded in the content view, such as a web view,
+// which handles its own mouse events.
+- (BOOL)eventIsOverChildView:(NSEvent *)event {
+    NSView *contentView = self.contentView;
+    NSPoint point = [contentView.superview convertPoint:event.locationInWindow fromView:nil];
+    NSView *hitView = [contentView hitTest:point];
+    return hitView != nil && hitView != contentView;
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
         case NSEventTypeLeftMouseDown: {
+            _leftMouseDownStartedInChildView = [self eventIsOverChildView:event];
             NSButton *windowButton = [self standardWindowButtonAtEvent:event];
             if (windowButton) {
                 _leftMouseDownStartedInNativeWindowChrome = YES;
@@ -490,7 +501,9 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp:
-            if (@available(macOS 27, *)) {
+            if (_leftMouseDownStartedInChildView) {
+                [super sendEvent:event];
+            } else if (@available(macOS 27, *)) {
                 if (_leftMouseDownStartedInNativeWindowChrome) {
                     [super sendEvent:event];
                 } else {
@@ -500,9 +513,12 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
                 [self.contentView mouseUp:event];
             }
             _leftMouseDownStartedInNativeWindowChrome = NO;
+            _leftMouseDownStartedInChildView = NO;
             break;
         case NSEventTypeLeftMouseDragged:
-            if (@available(macOS 27, *)) {
+            if (_leftMouseDownStartedInChildView) {
+                [super sendEvent:event];
+            } else if (@available(macOS 27, *)) {
                 if (_leftMouseDownStartedInNativeWindowChrome) {
                     [super sendEvent:event];
                 } else {
@@ -518,7 +534,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // locally, though it is unclear why. This breaks the right-click context menu for tabs on
         // local builds, so we propagate the RightMouseDown event manually.
         case NSEventTypeRightMouseDown:
-            [self.contentView rightMouseDown:event];
+            if ([self eventIsOverChildView:event]) {
+                [super sendEvent:event];
+            } else {
+                [self.contentView rightMouseDown:event];
+            }
             break;
         default:
             [super sendEvent:event];

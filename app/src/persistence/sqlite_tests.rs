@@ -17,8 +17,9 @@ use super::{
     read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
-    AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
-    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    AppState, BrowserPaneSnapshot, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents,
+    LeafSnapshot, PaneNodeSnapshot, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot,
+    WindowSnapshot,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::{CloudObjectPermissions, Owner};
@@ -646,6 +647,87 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     assert_eq!(tabs[1].path, Some(PathBuf::from("/tmp/lib.rs")));
     assert_eq!(tabs[2].path, None);
     assert!(matches!(source, Some(CodeSource::FileTree { .. })));
+}
+
+/// Verifies that a browser pane's tabs and active tab round-trip through save/restore.
+#[test]
+fn test_sqlite_round_trips_browser_pane_tabs() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![TabSnapshot {
+                custom_title: None,
+                root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+                    is_focused: true,
+                    custom_vertical_tabs_title: None,
+                    contents: LeafContents::Browser(BrowserPaneSnapshot {
+                        tab_urls: vec![
+                            "http://localhost:5173/".to_owned(),
+                            String::new(),
+                            "https://warp.dev/".to_owned(),
+                        ],
+                        active_tab_index: 2,
+                    }),
+                }),
+                default_directory_color: None,
+                selected_color: SelectedTabColor::default(),
+                left_panel: None,
+                right_panel: None,
+                group_id: None,
+                pinned: false,
+            }],
+            active_tab_index: 0,
+            team_uid: None,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_tab = &restored.windows[0].tabs[0];
+    let PaneNodeSnapshot::Leaf(LeafSnapshot {
+        contents: LeafContents::Browser(snapshot),
+        ..
+    }) = &restored_tab.root
+    else {
+        panic!("Expected browser pane leaf");
+    };
+
+    assert_eq!(
+        *snapshot,
+        BrowserPaneSnapshot {
+            tab_urls: vec![
+                "http://localhost:5173/".to_owned(),
+                String::new(),
+                "https://warp.dev/".to_owned(),
+            ],
+            active_tab_index: 2,
+        }
+    );
 }
 
 /// Verifies that a tab group and its membership round-trip through save/restore.

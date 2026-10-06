@@ -1,0 +1,13 @@
+{
+  "name": "warp-browser",
+  "owner": { "name": "Warp" },
+  "description": "Warp's browser pane tools for Claude Code.",
+  "plugins": [
+    {
+      "name": "warp-browser",
+      "source": "./warp-browser",
+      "description": "Warp's browser pane for Claude Code: open, read, click and screenshot pages next to your terminal.",
+      "version": "1.0.0"
+    }
+  ]
+}

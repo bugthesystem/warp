@@ -228,6 +228,7 @@ vte.workspace = true
 walkdir.workspace = true
 warp-workflows.workspace = true
 warp_assets.workspace = true
+warp_browser.workspace = true
 warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
@@ -1031,6 +1032,7 @@ ctrl_c_cancels_third_party_harness = []
 shell_widget_handoff = []
 history_search_ranking_v2 = []
 stored_screenshots = []
+browser_pane = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

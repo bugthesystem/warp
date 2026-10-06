@@ -1,0 +1,72 @@
+//! Embeds native web views as child views of Warp windows.
+//!
+//! The web view is a native OS view layered on top of the window's GPU surface rather than a
+//! WarpUI element, so callers position it explicitly with [`WebView::set_bounds`]. Only macOS is
+//! supported; on other platforms [`window_parent`] returns `None` and no web view can be created.
+
+#[cfg(not(target_family = "wasm"))]
+pub mod agent;
+pub mod annotation;
+pub mod claude_plugin;
+pub mod history;
+pub mod local_servers;
+pub mod screenshot;
+pub mod sites;
+mod url_input;
+
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(not(target_os = "macos"))]
+mod unsupported;
+
+#[cfg(target_os = "macos")]
+pub use mac::{WebView, WebViewParent, window_parent};
+#[cfg(not(target_os = "macos"))]
+pub use unsupported::{WebView, WebViewParent, window_parent};
+pub use url_input::{display_url, is_local_address, resolve_input};
+
+/// Whether web views can be embedded on the current platform.
+pub const fn is_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// A change reported by a [`WebView`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WebViewEvent {
+    TitleChanged(String),
+    LoadStarted {
+        url: String,
+    },
+    LoadFinished {
+        url: String,
+    },
+    /// The user clicked in the page, which gave it keyboard focus.
+    PageFocused,
+    /// The user saved a note in annotate mode, as JSON for [`annotation::PageAnnotation::parse`].
+    Annotation(String),
+    /// The user left annotate mode from the page.
+    AnnotateExited,
+    /// The user pressed a button Warp put in the page, named after [`PAGE_ACTION_PREFIX`].
+    PageAction(String),
+}
+
+/// A standard editing command for the page's focused element or selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    Cut,
+    Copy,
+    Paste,
+    Undo,
+    Redo,
+    SelectAll,
+}
+
+/// Prefix of the message a button Warp put in the page posts, followed by the action's name.
+pub const PAGE_ACTION_PREFIX: &str = "warp:action:";
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[cfg(target_os = "macos")]
+    #[error(transparent)]
+    WebView(#[from] wry::Error),
+}

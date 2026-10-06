@@ -301,10 +301,10 @@ use crate::palette::PaletteMode;
 use crate::pane_group::FilePane;
 use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::{
-    self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    CustomRouterEditorPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
-    ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
-    TabBarHoverIndex, TerminalPaneId,
+    self, AIFactPane, AnyPaneContent, BrowserPane, ChildAgentOrigin, CodeDiffPane, CodePane,
+    CodeReviewPanelArg, CustomRouterEditorPane, Direction as PaneGroupDirection, Direction,
+    EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions,
+    PaneGroup, PaneId, PanesLayout, TabBarHoverIndex, TerminalPaneId,
 };
 use crate::persistence::ModelEvent;
 use crate::projects::ProjectManagementModel;
@@ -15474,6 +15474,19 @@ impl Workspace {
         });
     }
 
+    /// Opens a browser pane as a right-split of the active pane group.
+    fn open_browser_pane(&mut self, url: Option<String>, ctx: &mut ViewContext<Self>) {
+        let pane = BrowserPane::new(url, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(
+                Direction::Right,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
     /// Opens the in-app network log pane as a right-split of the active pane
     /// group. If a pane already exists for the current window, refreshes its
     /// snapshot from the in-memory model and focuses it instead of opening
@@ -24533,6 +24546,44 @@ impl TypedActionView for Workspace {
             OpenNetworkLogPane => {
                 self.open_network_log_pane(ctx);
             }
+            OpenBrowserPane { url } => {
+                self.open_browser_pane(url.clone(), ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            SetUpClaudeCodeBrowserTools => {
+                let message = match crate::browser::write_claude_code_plugin() {
+                    Ok(command) => {
+                        let pasted = self.active_tab_pane_group().update(ctx, |group, ctx| {
+                            group.paste_into_shell_terminal(command.clone(), ctx)
+                        });
+                        if pasted {
+                            "Press Enter to install Warp's browser tools in Claude Code. After \
+                             that, Claude Code started in Warp has them without setup."
+                        } else {
+                            ctx.clipboard().write(ClipboardContent::plain_text(command));
+                            "Install command copied. Run it in a terminal to give Claude Code \
+                             Warp's browser tools."
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to write the Claude Code browser plugin: {err:#}");
+                        "Couldn't write the Claude Code plugin for browser tools."
+                    }
+                };
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack
+                        .add_ephemeral_toast(DismissibleToast::default(message.to_owned()), ctx);
+                });
+            }
+            #[cfg(target_family = "wasm")]
+            SetUpClaudeCodeBrowserTools => {}
+            #[cfg(not(target_family = "wasm"))]
+            ToggleBrowserAgentAutoApprove => {
+                crate::browser::BrowserAgent::handle(ctx)
+                    .update(ctx, |agent, ctx| agent.toggle_auto_approve(ctx));
+            }
+            #[cfg(target_family = "wasm")]
+            ToggleBrowserAgentAutoApprove => {}
             FixSettingsWithOz { error_description } => {
                 use crate::ai::skills::SkillManager;
                 let modify_settings_skill = SkillManager::as_ref(ctx)

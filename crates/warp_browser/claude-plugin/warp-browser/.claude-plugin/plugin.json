@@ -1,0 +1,6 @@
+{
+  "name": "warp-browser",
+  "version": "1.0.0",
+  "description": "Warp's browser pane for Claude Code: open, read, click and screenshot pages next to your terminal.",
+  "author": { "name": "Warp" }
+}

@@ -1,0 +1,160 @@
+use serde_json::{Map, Value};
+
+/// How many characters of typed text a step shows.
+const STEP_TEXT_PREVIEW: usize = 24;
+
+/// An action an agent asked a browser pane to take. `tab` selects a browser pane by the id
+/// `browser_tabs` reports; `None` means the most recently used one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserCommand {
+    Open {
+        url: String,
+    },
+    ListTabs,
+    Navigate {
+        tab: Option<u64>,
+        url: String,
+    },
+    Read {
+        tab: Option<u64>,
+    },
+    Screenshot {
+        tab: Option<u64>,
+    },
+    Console {
+        tab: Option<u64>,
+        clear: bool,
+    },
+    Click {
+        tab: Option<u64>,
+        element: u64,
+    },
+    Type {
+        tab: Option<u64>,
+        element: u64,
+        text: String,
+        submit: bool,
+    },
+    Annotations,
+}
+
+/// What a tool returns to the agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolOutput {
+    Text(String),
+    Png(Vec<u8>),
+}
+
+/// A tool call waiting to run on the main thread.
+pub struct ToolRequest {
+    pub command: BrowserCommand,
+    pub reply: tokio::sync::oneshot::Sender<Result<ToolOutput, String>>,
+}
+
+impl BrowserCommand {
+    /// The tab the command acts on, where it acts on an existing tab. `None` means the current
+    /// tab for those commands.
+    pub fn tab(&self) -> Option<u64> {
+        match self {
+            Self::Navigate { tab, .. }
+            | Self::Read { tab }
+            | Self::Screenshot { tab }
+            | Self::Console { tab, .. }
+            | Self::Click { tab, .. }
+            | Self::Type { tab, .. } => *tab,
+            Self::Open { .. } | Self::ListTabs | Self::Annotations => None,
+        }
+    }
+
+    /// What the command does, shown to the user while the agent works. `None` for commands
+    /// that do not touch a page.
+    pub fn step(&self) -> Option<String> {
+        match self {
+            Self::Open { url } => Some(format!("Opening {url}")),
+            Self::Navigate { url, .. } => Some(format!("Going to {url}")),
+            Self::Read { .. } => Some("Reading the page".to_owned()),
+            Self::Screenshot { .. } => Some("Taking a screenshot".to_owned()),
+            Self::Console { .. } => Some("Checking the console".to_owned()),
+            Self::Click { element, .. } => Some(format!("Clicking element {element}")),
+            Self::Type { element, text, .. } => {
+                let preview: String = text.chars().take(STEP_TEXT_PREVIEW).collect();
+                let ellipsis = if text.chars().count() > STEP_TEXT_PREVIEW {
+                    "…"
+                } else {
+                    ""
+                };
+                Some(format!(
+                    "Typing \"{preview}{ellipsis}\" into element {element}"
+                ))
+            }
+            Self::ListTabs | Self::Annotations => None,
+        }
+    }
+
+    /// Parses an MCP tool call. The error is a message for the agent.
+    pub fn from_tool_call(name: &str, args: &Map<String, Value>) -> Result<Self, String> {
+        let tab = optional_u64(args, "tab")?;
+        match name {
+            "browser_open" => Ok(Self::Open {
+                url: required_string(args, "url")?,
+            }),
+            "browser_tabs" => Ok(Self::ListTabs),
+            "browser_navigate" => Ok(Self::Navigate {
+                tab,
+                url: required_string(args, "url")?,
+            }),
+            "browser_read" => Ok(Self::Read { tab }),
+            "browser_screenshot" => Ok(Self::Screenshot { tab }),
+            "browser_console" => Ok(Self::Console {
+                tab,
+                clear: optional_bool(args, "clear")?.unwrap_or(false),
+            }),
+            "browser_click" => Ok(Self::Click {
+                tab,
+                element: required_u64(args, "element")?,
+            }),
+            "browser_type" => Ok(Self::Type {
+                tab,
+                element: required_u64(args, "element")?,
+                text: required_string(args, "text")?,
+                submit: optional_bool(args, "submit")?.unwrap_or(false),
+            }),
+            "browser_annotations" => Ok(Self::Annotations),
+            _ => Err(format!("Unknown tool `{name}`")),
+        }
+    }
+}
+
+fn required_string(args: &Map<String, Value>, key: &str) -> Result<String, String> {
+    match args.get(key) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(_) => Err(format!("`{key}` must be a string")),
+        None => Err(format!("`{key}` is required")),
+    }
+}
+
+fn required_u64(args: &Map<String, Value>, key: &str) -> Result<u64, String> {
+    optional_u64(args, key)?.ok_or_else(|| format!("`{key}` is required"))
+}
+
+fn optional_u64(args: &Map<String, Value>, key: &str) -> Result<Option<u64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("`{key}` must be a non-negative integer")),
+    }
+}
+
+fn optional_bool(args: &Map<String, Value>, key: &str) -> Result<Option<bool>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(format!("`{key}` must be a boolean")),
+    }
+}
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod tests;

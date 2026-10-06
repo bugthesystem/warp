@@ -515,7 +515,7 @@ impl super::TerminalView {
                     .model
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
-                ctx.open_url(&uri);
+                Self::open_link_url(&uri, ctx);
             }
             GridHighlightedLink::Hyperlink { uri, .. } => {
                 self.open_hyperlink_uri(uri, ctx);

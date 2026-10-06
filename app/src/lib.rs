@@ -11,6 +11,7 @@ mod auth;
 mod autoupdate;
 mod banner;
 mod billing;
+mod browser;
 mod changelog_model;
 mod chip_configurator;
 mod cloud_object;
@@ -156,6 +157,7 @@ use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
 use auth::auth_manager::{AuthManager, AuthManagerEvent};
 use auth::auth_state::{AuthState, AuthStateProvider};
+pub use browser::BrowserViewRegistry;
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
 use code_review::GlobalCodeReviewModel;
@@ -1870,6 +1872,11 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| RecordingController::new());
     ctx.add_singleton_model(|_| ExecutionProfileEditorManager::default());
     ctx.add_singleton_model(|_| NetworkLogPaneManager::default());
+    ctx.add_singleton_model(|_| browser::BrowserViewRegistry::default());
+    ctx.add_singleton_model(|_| browser::BrowserHistoryModel::new());
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(browser::BrowserAgent::new);
+    ctx.on_frame_drawn(|ctx, window_id| browser::sync_webviews(window_id, ctx));
     ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(ai::pricing_promotion::PricingPromotionState::new);
     ctx.add_singleton_model(|ctx| {
@@ -2097,6 +2104,7 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     code::editor::find::view::init(ctx);
     workspace::init(ctx);
+    browser::init(ctx);
     pane_group::init(ctx);
     terminal::init(ctx);
     input::init(ctx);
@@ -2620,12 +2628,17 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     if launch_mode.should_start_local_http_server() {
         ctx.add_singleton_model(move |ctx| {
-            let routers = vec![
+            let mut routers = vec![
                 app_installation_detection::make_router(),
                 profiling::make_router(),
             ];
+            if FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported() {
+                routers.push(browser::BrowserAgent::as_ref(ctx).router());
+            }
             http_server::HttpServer::new(routers, ctx)
         });
+        TemplatableMCPServerManager::handle(ctx)
+            .update(ctx, |manager, ctx| manager.attach_browser_server(ctx));
     }
     #[cfg(feature = "local_fs")]
     if matches!(

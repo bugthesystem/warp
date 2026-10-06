@@ -765,6 +765,17 @@ impl TemplatableMCPServerManager {
         self.spawn_ephemeral_server(installation, ctx);
     }
 
+    /// Attaches the built-in browser MCP server, which Warp's local HTTP server hosts, so the
+    /// agent can drive browser panes. Call once that server is listening.
+    pub fn attach_browser_server(&mut self, ctx: &mut ModelContext<Self>) {
+        if FeatureFlag::BrowserPane.is_enabled()
+            && warp_browser::is_supported()
+            && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
+        {
+            self.spawn_ephemeral_server(builtin::browser_mcp_installation(), ctx);
+        }
+    }
+
     /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
     /// MCP) with the feature-flag and auth state: spawns the server when it
     /// should be running and isn't, and shuts it down when it shouldn't be.

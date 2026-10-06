@@ -39,7 +39,8 @@ impl HttpServer {
     ) -> Result<tokio::runtime::Runtime, std::io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
-            .enable_io()
+            // Hosted services such as MCP sessions rely on timers as well as IO.
+            .enable_all()
             .build()?;
 
         let mut root = axum::Router::new();
@@ -47,12 +48,24 @@ impl HttpServer {
             root = root.merge(router);
         }
 
+        // Bind before returning so clients started right after this, such as built-in MCP
+        // servers hosted here, can connect without racing the server's startup.
+        let addr = SocketAddr::from(([127, 0, 0, 1], Self::port()));
+        let listener = match std::net::TcpListener::bind(addr)
+            .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))
+        {
+            Ok(listener) => listener,
+            Err(err) => {
+                log::error!("Failed to bind local HTTP server on {addr}: {err:#}");
+                return Ok(runtime);
+            }
+        };
+
         runtime.spawn(async move {
-            let addr = SocketAddr::from(([127, 0, 0, 1], Self::port()));
-            let listener = match tokio::net::TcpListener::bind(addr).await {
+            let listener = match tokio::net::TcpListener::from_std(listener) {
                 Ok(listener) => listener,
                 Err(err) => {
-                    log::error!("Failed to bind local HTTP server on {addr}: {err:#}");
+                    log::error!("Failed to start local HTTP server on {addr}: {err:#}");
                     return;
                 }
             };

@@ -877,6 +877,17 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Opens a browser pane as a right-split of the active pane group, showing `url` or a default
+    /// page. Gated on `FeatureFlag::BrowserPane`.
+    OpenBrowserPane {
+        url: Option<String>,
+    },
+    /// Writes the Claude Code plugin for the browser pane's agent tools and puts its install
+    /// command in a terminal.
+    SetUpClaudeCodeBrowserTools,
+    /// Switches between agents asking before using sites that are not local in browser panes,
+    /// and approving them automatically.
+    ToggleBrowserAgentAutoApprove,
     /// Opens or focuses a window scoped to the specified team.
     OpenNewWindowForTeam {
         team_uid: ServerId,
@@ -1210,6 +1221,9 @@ impl WorkspaceAction {
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
+            | OpenBrowserPane { .. }
+            | SetUpClaudeCodeBrowserTools
+            | ToggleBrowserAgentAutoApprove
             | OpenNewWindowForTeam { .. }
             | BrowseTeams
             | ShowTeamSwitcherMenu => false,

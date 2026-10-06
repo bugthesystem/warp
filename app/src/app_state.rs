@@ -151,6 +151,8 @@ pub enum LeafContents {
     /// The in-app network log pane. Not persisted across restarts because the
     /// backing log is an in-memory ring buffer that starts empty on launch.
     NetworkLog,
+    /// The browser pane.
+    Browser(BrowserPaneSnapshot),
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStarted,
 }
@@ -187,9 +189,18 @@ impl LeafContents {
             | LeafContents::ExecutionProfileEditor
             | LeafContents::CodeReview(_)
             | LeafContents::AmbientAgent(_)
-            | LeafContents::GetStarted => true,
+            | LeafContents::GetStarted
+            | LeafContents::Browser(_) => true,
         }
     }
+}
+
+/// Snapshot of a browser pane.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BrowserPaneSnapshot {
+    /// Tab URLs in tab strip order. An empty URL is a new-tab page.
+    pub tab_urls: Vec<String>,
+    pub active_tab_index: usize,
 }
 
 /// Snapshot of an ambient agent pane.

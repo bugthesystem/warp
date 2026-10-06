@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "warp-browser": {
+      "type": "http",
+      "url": "${WARP_BROWSER_MCP_URL}",
+      "headers": { "Authorization": "Bearer ${WARP_BROWSER_MCP_TOKEN}" }
+    }
+  }
+}

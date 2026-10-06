@@ -1,0 +1,65 @@
+[package]
+name = "warp_browser"
+version = "0.1.0"
+edition = "2024"
+description = "Embeds native web views as child views of Warp windows"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+pathfinder_geometry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+warpui.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-channel.workspace = true
+axum.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSBitmapImageRep",
+    "NSEvent",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSProcessInfo",
+    "NSString",
+] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "block2",
+    "objc2-app-kit",
+    "std",
+    "WKSnapshotConfiguration",
+    "WKWebView",
+] }
+wry.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+reqwest.workspace = true
+rmcp = { workspace = true, features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile.workspace = true

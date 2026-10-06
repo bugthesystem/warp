@@ -68,3 +68,25 @@ fn test_click_through_layer_does_not_cover_lower_layers() {
 
     assert!(!scene.is_covered(Point::new(10., 10., ZIndex::new(0))));
 }
+
+#[test]
+fn overlay_layer_drawing_over_a_rect_overlays_it() {
+    let mut scene = Scene::new(1., rendering::Config::default());
+    scene.draw_rect_with_hit_recording(RectF::new(vec2f(0., 0.), vec2f(400., 400.)));
+
+    scene.start_overlay_layer(ClipBounds::None);
+    scene.draw_rect_with_hit_recording(RectF::new(vec2f(100., 100.), vec2f(50., 50.)));
+
+    assert!(scene.is_overlaid(RectF::new(vec2f(120., 120.), vec2f(200., 200.))));
+    assert!(!scene.is_overlaid(RectF::new(vec2f(200., 200.), vec2f(100., 100.))));
+}
+
+#[test]
+fn normal_layers_do_not_overlay_a_rect() {
+    let mut scene = Scene::new(1., rendering::Config::default());
+
+    scene.start_layer(ClipBounds::None);
+    scene.draw_rect_with_hit_recording(RectF::new(vec2f(0., 0.), vec2f(400., 400.)));
+
+    assert!(!scene.is_overlaid(RectF::new(vec2f(10., 10.), vec2f(50., 50.))));
+}

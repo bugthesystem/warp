@@ -674,7 +674,7 @@ pub struct AppContext {
     app_focus_info: AppFocusInfo,
     #[allow(clippy::type_complexity)]
     first_frame_callback: Option<Box<dyn Fn(&mut AppContext)>>,
-    frame_drawn_callback: Option<Box<FrameDrawnCallback>>,
+    frame_drawn_callbacks: Vec<Box<FrameDrawnCallback>>,
     global_shortcuts: HashMap<Keystroke, GlobalShortcut>,
     next_frame_callbacks: HashMap<WindowId, Vec<Box<dyn Fn()>>>,
     on_draw_frame_error_callback: Option<Box<DrawFrameErrorCallback>>,
@@ -832,7 +832,7 @@ impl AppContext {
             flushing_effects: false,
             app_focus_info: AppFocusInfo::new(),
             first_frame_callback: None,
-            frame_drawn_callback: None,
+            frame_drawn_callbacks: Vec::new(),
             global_shortcuts: Default::default(),
             next_frame_callbacks: Default::default(),
             event_munger: Box::new(|_evt, _ctx| {}),
@@ -1185,9 +1185,10 @@ impl AppContext {
         self.first_frame_callback = Some(Box::new(callback));
     }
 
-    ///  Callback that is called whenever a frame is successfully drawn.
+    /// Registers a callback that is called whenever a frame is successfully drawn. Callbacks
+    /// accumulate: registering one does not replace those registered earlier.
     pub fn on_frame_drawn<F: 'static + Fn(&mut AppContext, WindowId)>(&mut self, callback: F) {
-        self.frame_drawn_callback = Some(Box::new(callback));
+        self.frame_drawn_callbacks.push(Box::new(callback));
     }
 
     /// Callback invoked whenever a frame fails to render in a given [`WindowId`].
@@ -1249,11 +1250,13 @@ impl AppContext {
             callback(self);
         }
 
-        let frame_drawn_callback = self.frame_drawn_callback.take();
-        if let Some(callback) = &frame_drawn_callback {
+        let mut frame_drawn_callbacks = std::mem::take(&mut self.frame_drawn_callbacks);
+        for callback in &frame_drawn_callbacks {
             callback(self, window_id);
         }
-        self.frame_drawn_callback = frame_drawn_callback;
+        // Keep any callbacks registered while the callbacks above ran.
+        frame_drawn_callbacks.append(&mut self.frame_drawn_callbacks);
+        self.frame_drawn_callbacks = frame_drawn_callbacks;
 
         if let Some(callbacks) = self.next_frame_callbacks.remove(&window_id) {
             for callback in callbacks {

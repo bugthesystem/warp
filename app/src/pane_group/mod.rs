@@ -121,6 +121,7 @@ use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
@@ -192,6 +193,7 @@ mod tests;
 
 pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
+pub use pane::browser_pane::BrowserPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
 pub use pane::custom_router_editor_pane::CustomRouterEditorPane;
@@ -2005,6 +2007,20 @@ impl PaneGroup {
                 Err(anyhow::anyhow!(
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
+            }
+            LeafContents::Browser(snapshot) => {
+                if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
+                    return Err(anyhow::anyhow!("Browser panes are not enabled"));
+                }
+                let pane: Box<dyn AnyPaneContent + 'static> =
+                    Box::new(BrowserPane::restore(&snapshot, ctx));
+                let pane_id = pane.as_pane().id();
+                pane_contents.insert(pane_id, pane);
+                let focus = InitialFocus {
+                    focused_pane: leaf.is_focused.then_some(pane_id),
+                    active_session: None,
+                };
+                Ok((PaneData::new(pane_id), focus))
             }
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
@@ -7918,6 +7934,58 @@ impl PaneGroup {
                 is_shared.then(|| terminal_view.id())
             })
             .collect()
+    }
+
+    /// Pastes `text` into a terminal in this tab that is not running a CLI agent, preferring the
+    /// active session, and focuses it. Nothing is submitted. Returns whether a terminal received
+    /// it.
+    pub fn paste_into_shell_terminal(&mut self, text: String, ctx: &mut ViewContext<Self>) -> bool {
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        let shells: Vec<(PaneId, ViewHandle<TerminalView>)> = self
+            .panes_of::<TerminalPane>()
+            .map(|pane| (pane.terminal_pane_id().into(), pane.terminal_view(ctx)))
+            .filter(|(pane_id, view)| {
+                !self.is_pane_hidden_for_close(*pane_id) && sessions.session(view.id()).is_none()
+            })
+            .collect();
+        let active = self.active_session_view(ctx).map(|view| view.id());
+        let target = shells
+            .iter()
+            .find(|(_, view)| Some(view.id()) == active)
+            .or(shells.first())
+            .cloned();
+        let Some((pane_id, view)) = target else {
+            return false;
+        };
+        view.update(ctx, |view, ctx| view.paste_text(text, ctx));
+        self.focus_pane(pane_id, true, ctx);
+        true
+    }
+
+    /// Pastes `text` into the terminal in this tab that runs a CLI agent, such as Claude Code, or
+    /// into the active terminal session when none does, and focuses that pane. Returns whether a
+    /// terminal received it.
+    pub fn paste_into_agent_terminal(&mut self, text: String, ctx: &mut ViewContext<Self>) -> bool {
+        let terminals: Vec<(PaneId, ViewHandle<TerminalView>)> = self
+            .panes_of::<TerminalPane>()
+            .map(|pane| (pane.terminal_pane_id().into(), pane.terminal_view(ctx)))
+            .filter(|(pane_id, _)| !self.is_pane_hidden_for_close(*pane_id))
+            .collect();
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        let target = terminals
+            .iter()
+            .find(|(_, view)| sessions.session(view.id()).is_some())
+            .or_else(|| {
+                let active = self.active_session_view(ctx)?;
+                terminals.iter().find(|(_, view)| view.id() == active.id())
+            })
+            .cloned();
+        let Some((pane_id, view)) = target else {
+            return false;
+        };
+        view.update(ctx, |view, ctx| view.paste_text(text, ctx));
+        self.focus_pane(pane_id, true, ctx);
+        true
     }
 
     /// Filters out any hidden panes that aren't yet deleted (due to undo functionality).

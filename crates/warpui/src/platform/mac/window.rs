@@ -1216,6 +1216,10 @@ pub trait WindowExt {
 
     /// Sets whether or not to show the native macOS window buttons (traffic lights).
     fn set_window_buttons(&self, window_buttons: bool);
+
+    /// Returns the window's content view, which native child views (such as web views) can be
+    /// attached to. `None` when there is no native window, such as in unit tests.
+    fn content_view(&self) -> Option<Retained<NSView>>;
 }
 
 /// Utility for interacting with the native [`Window`] implementation. The native window is always
@@ -1242,6 +1246,10 @@ impl WindowExt for &dyn platform::Window {
         if let Some(window) = native_window(*self) {
             window.0.set_window_buttons(window_buttons)
         }
+    }
+
+    fn content_view(&self) -> Option<Retained<NSView>> {
+        native_window(*self).and_then(|window| window.0.window().contentView())
     }
 }
 

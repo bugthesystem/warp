@@ -4,8 +4,8 @@ use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use rstar::RTree;
 use rstar::primitives::Rectangle;
+use rstar::{AABB, RTree};
 use vec1::{Vec1, vec1};
 
 use crate::elements::{Fill, Point};
@@ -395,6 +395,23 @@ impl Scene {
             ZIndex::Normal(index) => &mut self.layers[index],
             ZIndex::Overlay(index) => &mut self.overlay_layers[index],
         }
+    }
+
+    /// Whether any overlay layer, such as a menu, modal or tooltip, drew something that receives
+    /// clicks inside `rect`.
+    pub fn is_overlaid(&self, rect: RectF) -> bool {
+        let envelope = AABB::from_corners(
+            [rect.min_x().into(), rect.min_y().into()],
+            [rect.max_x().into(), rect.max_y().into()],
+        );
+        self.overlay_layers.iter().any(|layer| {
+            !layer.click_through
+                && layer
+                    .hit_map
+                    .locate_in_envelope_intersecting(&envelope)
+                    .next()
+                    .is_some()
+        })
     }
 
     pub fn is_covered(&self, position: Point) -> bool {

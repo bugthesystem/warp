@@ -524,5 +524,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true (PR #11723)
     register_test!(test_rich_input_enter_accepts_menu_item_when_toggle_is_true);
 
+    // Browser pane
+    register_test!(test_open_browser_pane_splits_and_focuses);
+    register_test!(test_closed_browser_pane_is_not_offered_to_agents);
+
     tests
 }

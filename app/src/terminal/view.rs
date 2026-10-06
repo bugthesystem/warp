@@ -17082,18 +17082,29 @@ impl TerminalView {
             })
     }
 
+    /// Where a paste goes: the input box, and whether the running program asked for bracketed
+    /// paste.
+    fn paste_target(&self, ctx: &ViewContext<Self>) -> (bool, bool) {
+        let mut model = self.model.lock();
+        (
+            // If the block list isn't bootstrapped yet, there could be something in the .rc file waiting for input,
+            // and we want the paste to go there if the editor isn't focused.
+            self.is_input_box_visible(&model, ctx)
+                && (self.input.as_ref(ctx).editor().is_focused(ctx)
+                    || model.block_list().is_bootstrapped()),
+            model.needs_bracketed_paste(),
+        )
+    }
+
+    /// Pastes `text` as if it came from the clipboard: into the input box at a prompt, or to the
+    /// running program, such as a CLI agent, otherwise. Nothing is submitted.
+    pub(crate) fn paste_text(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let (should_paste_in_input, needs_bracketed_paste) = self.paste_target(ctx);
+        self.insert_pasted(text, should_paste_in_input, needs_bracketed_paste, ctx);
+    }
+
     fn paste(&mut self, middle_click: bool, ctx: &mut ViewContext<Self>) {
-        let (should_paste_in_input, needs_bracketed_paste) = {
-            let mut model = self.model.lock();
-            (
-                // If the block list isn't bootstrapped yet, there could be something in the .rc file waiting for input,
-                // and we want the paste to go there if the editor isn't focused.
-                self.is_input_box_visible(&model, ctx)
-                    && (self.input.as_ref(ctx).editor().is_focused(ctx)
-                        || model.block_list().is_bootstrapped()),
-                model.needs_bracketed_paste(),
-            )
-        };
+        let (should_paste_in_input, needs_bracketed_paste) = self.paste_target(ctx);
 
         let is_cli_agent_paste =
             !should_paste_in_input && !middle_click && self.has_active_cli_agent_session(ctx);
@@ -17106,7 +17117,7 @@ impl TerminalView {
         } else {
             Some(self.shell_family(ctx))
         };
-        let mut copied = if middle_click {
+        let copied = if middle_click {
             TerminalView::middle_click_paste_content(shell_family, ctx)
         } else {
             let clipboard_content = ctx.clipboard().read();
@@ -17134,7 +17145,16 @@ impl TerminalView {
 
             clipboard_content_with_escaped_paths(clipboard_content, shell_family, false)
         };
+        self.insert_pasted(copied, should_paste_in_input, needs_bracketed_paste, ctx);
+    }
 
+    fn insert_pasted(
+        &mut self,
+        mut copied: String,
+        should_paste_in_input: bool,
+        needs_bracketed_paste: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if should_paste_in_input {
             // We put everything from the clipboard into the input box, even
             // if it includes non-printable characters.
@@ -19183,7 +19203,7 @@ impl TerminalView {
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.notify();
-                ctx.open_url(&uri);
+                Self::open_link_url(&uri, ctx);
             }
             GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
                 self.open_hyperlink_uri(uri, ctx);
@@ -19204,7 +19224,22 @@ impl TerminalView {
             return;
         }
         ctx.notify();
-        ctx.open_url(uri);
+        Self::open_link_url(uri, ctx);
+    }
+
+    /// Opens a link from terminal output. Local addresses, such as a dev server, open in a browser
+    /// pane when browser panes are enabled; everything else opens in the default browser.
+    pub(super) fn open_link_url(uri: &str, ctx: &mut ViewContext<Self>) {
+        if FeatureFlag::BrowserPane.is_enabled()
+            && warp_browser::is_supported()
+            && warp_browser::is_local_address(uri)
+        {
+            ctx.dispatch_typed_action(&WorkspaceAction::OpenBrowserPane {
+                url: Some(uri.to_owned()),
+            });
+        } else {
+            ctx.open_url(uri);
+        }
     }
 
     fn middle_click_on_grid(
