@@ -1,0 +1,42 @@
+#!/bin/bash
+#
+# Builds Warped, this fork's temporary macOS build with the browser pane, as a zipped .app.
+#
+# Warped is the open-source (oss) channel renamed so it installs next to an official Warp. It is
+# ad-hoc signed rather than signed with an Apple Developer ID, so macOS quarantines it when
+# downloaded; the Homebrew cask clears that flag after installing.
+#
+# Usage: script/macos/release_warped <version> [aarch64|x86_64]
+# Writes target/warped/Warped-<version>-<arch>.zip and prints its SHA-256.
+
+set -eo pipefail
+
+VERSION="${1:?Usage: script/macos/release_warped <version> [aarch64|x86_64]}"
+ARCH="${2:-aarch64}"
+
+cd "$(git rev-parse --show-toplevel)"
+
+./script/bundle --channel oss --arch "$ARCH" --features browser_pane
+
+OUT_DIR="target/warped"
+APP="$OUT_DIR/Warped.app"
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+cp -R target/release-lto/bundle/osx/WarpOss.app "$APP"
+
+PLIST="$APP/Contents/Info.plist"
+plutil -replace CFBundleName -string "Warped" "$PLIST"
+plutil -replace CFBundleDisplayName -string "Warped" "$PLIST" 2>/dev/null \
+  || plutil -insert CFBundleDisplayName -string "Warped" "$PLIST"
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
+plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
+
+# Editing Info.plist invalidates the bundle's signature, and Apple silicon refuses to run unsigned
+# code, so sign the whole bundle again ad hoc.
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$APP"
+
+ZIP="$OUT_DIR/Warped-$VERSION-$ARCH.zip"
+ditto -c -k --keepParent "$APP" "$ZIP"
+echo "Built $ZIP"
+shasum -a 256 "$ZIP"
