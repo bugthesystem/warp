@@ -12,9 +12,11 @@ use instant::Instant;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::{AnyThread, available};
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_graphics::{
     CGDataProvider, CGImage, CGImageByteOrderInfo, CGPreflightScreenCaptureAccess,
-    CGRequestScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID,
+    kCGWindowNumber,
 };
 use objc2_foundation::{NSDictionary, NSError, NSNumber, NSString};
 use objc2_screen_capture_kit::{
@@ -58,6 +60,27 @@ pub fn request_permission() {
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+}
+
+pub fn is_on_current_desktop(window_id: u32) -> bool {
+    let Some(info) =
+        CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, kCGNullWindowID)
+    else {
+        return false;
+    };
+    // SAFETY: Core Graphics documents the result as an array of dictionaries with CFString keys
+    // and CFType values.
+    let info: CFRetained<CFArray<CFDictionary<CFString, CFType>>> =
+        unsafe { CFRetained::cast_unchecked(info) };
+    // SAFETY: reading a constant key.
+    let number_key = unsafe { kCGWindowNumber };
+    info.iter().any(|window| {
+        window
+            .get(number_key)
+            .and_then(|number| number.downcast::<CFNumber>().ok())
+            .and_then(|number| number.as_i64())
+            == Some(i64::from(window_id))
+    })
 }
 
 pub fn has_input_permission() -> bool {

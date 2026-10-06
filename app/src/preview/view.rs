@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use warp_browser::local_servers::LocalServer;
 use warp_core::ui::appearance::Appearance;
+use warp_preview::simulator::SimulatorEntry;
 use warp_preview::window::WindowEntry;
-use warp_preview::{Rate, Source, WindowSource};
+use warp_preview::{Rate, SimulatorSource, Source, WindowSource};
 use warpui::r#async::Timer;
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::elements::{ChildView, Container, Flex, MouseStateHandle, ParentElement};
@@ -30,6 +31,7 @@ const DEFAULT_TITLE: &str = "Preview";
 const URL_FIELD_PLACEHOLDER: &str = "Enter a URL to preview, such as localhost:3000";
 const MAX_LOCAL_SERVERS: usize = 6;
 const MAX_WINDOWS: usize = 12;
+const MAX_SIMULATORS: usize = 6;
 const NOTICE_DURATION: Duration = Duration::from_secs(2);
 /// How long an agent's step shows on the badge after its last call.
 const AGENT_STEP_LINGER: Duration = Duration::from_secs(4);
@@ -44,6 +46,7 @@ pub enum PreviewViewAction {
     Stage(StageAction),
     OpenUrl(String),
     OpenWindow(WindowSource),
+    OpenSimulator(SimulatorSource),
     /// Leaves the start page for the stage, when there are previews to show.
     BackToStage,
     RefreshWindows,
@@ -62,6 +65,16 @@ enum WindowList {
     Loading,
     NeedsPermission,
     Listed(Vec<WindowEntry>),
+    Failed(String),
+}
+
+/// What the start page knows about iOS simulators.
+enum SimulatorList {
+    Unsupported,
+    Loading,
+    /// Baguette, which runs simulators without their window, is not installed.
+    NeedsBaguette,
+    Listed(Vec<SimulatorEntry>),
     Failed(String),
 }
 
@@ -87,6 +100,7 @@ pub struct PreviewView {
     stage_mouse_states: StageMouseStates,
     local_servers: Vec<LocalServer>,
     windows: WindowList,
+    simulators: SimulatorList,
     row_buttons: Vec<MouseStateHandle>,
     download_button: MouseStateHandle,
     permission_button: MouseStateHandle,
@@ -143,7 +157,8 @@ impl PreviewView {
             stage_mouse_states: StageMouseStates::default(),
             local_servers: Vec::new(),
             windows: WindowList::Loading,
-            row_buttons: (0..MAX_LOCAL_SERVERS + MAX_WINDOWS)
+            simulators: SimulatorList::Loading,
+            row_buttons: (0..MAX_LOCAL_SERVERS + MAX_WINDOWS + MAX_SIMULATORS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             download_button: MouseStateHandle::default(),
@@ -311,6 +326,28 @@ impl PreviewView {
             },
         );
         self.refresh_windows(ctx);
+        self.refresh_simulators(ctx);
+    }
+
+    fn refresh_simulators(&mut self, ctx: &mut ViewContext<Self>) {
+        if !warp_preview::simulator::is_supported() {
+            self.simulators = SimulatorList::Unsupported;
+            return;
+        }
+        if warp_preview::simulator::find_baguette().is_none() {
+            self.simulators = SimulatorList::NeedsBaguette;
+            return;
+        }
+        ctx.spawn(
+            async { warp_preview::simulator::list_simulators() },
+            |me, simulators, ctx| {
+                me.simulators = match simulators {
+                    Ok(simulators) => SimulatorList::Listed(simulators),
+                    Err(err) => SimulatorList::Failed(err.to_string()),
+                };
+                ctx.notify();
+            },
+        );
     }
 
     fn refresh_windows(&mut self, ctx: &mut ViewContext<Self>) {
@@ -618,6 +655,10 @@ impl PreviewView {
             appearance,
         ));
 
+        if let Some(section) = self.render_simulators(rows.by_ref(), appearance) {
+            children.push(section);
+        }
+
         children.push(start_page::section(
             Icon::AgentMode,
             "Agents",
@@ -641,6 +682,73 @@ impl PreviewView {
         ));
 
         start_page::page(children)
+    }
+
+    /// The iOS simulators section, or `None` where simulators can't be previewed.
+    fn render_simulators<'a>(
+        &self,
+        rows: impl Iterator<Item = &'a MouseStateHandle>,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let (simulator_rows, note) = match &self.simulators {
+            SimulatorList::Unsupported => return None,
+            SimulatorList::Loading => (
+                Vec::new(),
+                Some(start_page::note("Looking for simulators…", appearance)),
+            ),
+            SimulatorList::NeedsBaguette => (
+                Vec::new(),
+                Some(start_page::note(
+                    "Simulators run here without their own window through Baguette. Install it \
+                     with `brew install baguette`, then open this page again.",
+                    appearance,
+                )),
+            ),
+            SimulatorList::Failed(reason) => (
+                Vec::new(),
+                Some(start_page::note(&format!("{reason}."), appearance)),
+            ),
+            SimulatorList::Listed(simulators) if simulators.is_empty() => (
+                Vec::new(),
+                Some(start_page::note(
+                    "No iOS simulators are installed. Add one in Xcode.",
+                    appearance,
+                )),
+            ),
+            SimulatorList::Listed(simulators) => (
+                simulators
+                    .iter()
+                    .take(MAX_SIMULATORS)
+                    .zip(rows)
+                    .map(|(simulator, mouse_state)| {
+                        let detail = if simulator.booted {
+                            format!("{} · running", simulator.runtime)
+                        } else {
+                            simulator.runtime.clone()
+                        };
+                        start_page::row(
+                            start_page::RowContent {
+                                icon: Icon::Phone,
+                                title: &simulator.source.name,
+                                detail: Some(&detail),
+                                hover_hint: "Preview",
+                            },
+                            mouse_state,
+                            PreviewViewAction::OpenSimulator(simulator.source.clone()),
+                            appearance,
+                        )
+                    })
+                    .collect(),
+                None,
+            ),
+        };
+        Some(start_page::section(
+            Icon::Phone,
+            "iOS simulators",
+            simulator_rows,
+            note,
+            appearance,
+        ))
     }
 
     /// Which browser page previews use, or how to get one.
@@ -780,6 +888,9 @@ impl TypedActionView for PreviewView {
             ),
             PreviewViewAction::OpenWindow(window) => {
                 self.open_source(Source::Window(window.clone()), ctx)
+            }
+            PreviewViewAction::OpenSimulator(simulator) => {
+                self.open_source(Source::Simulator(simulator.clone()), ctx)
             }
             PreviewViewAction::BackToStage => {
                 if !self.cards.is_empty() {

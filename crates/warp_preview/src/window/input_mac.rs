@@ -71,7 +71,9 @@ pub(super) fn actions(event: &InputEvent, size: Vector2F) -> Vec<Action> {
         Vector2I::new(at.x().round() as i32, at.y().round() as i32)
     };
     match event {
-        InputEvent::Drag { at } => vec![Action::MouseMove { to: to_window(*at) }],
+        InputEvent::Move { at } | InputEvent::Drag { at } => {
+            vec![Action::MouseMove { to: to_window(*at) }]
+        }
         InputEvent::Down {
             button,
             at,

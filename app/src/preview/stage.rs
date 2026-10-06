@@ -12,7 +12,7 @@ use warp_preview::input::{Modifiers, PointerButton};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, Empty, EventDispatchMode, EventHandler, Flex, Hoverable, Image,
+    DispatchEventResult, Empty, EventDispatchMode, EventHandler, Expanded, Flex, Hoverable, Image,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, SavePosition, Stack, Text,
 };
@@ -33,10 +33,13 @@ const BAR_HEIGHT: f32 = 30.;
 const BAR_ICON_SIZE: f32 = 15.;
 const BAR_BUTTON_WIDTH: f32 = 28.;
 const PICTURE_CORNER_RADIUS: f32 = 10.;
+/// Height of the row under the picture that holds the badge, the controls and the pile.
+const FOOTER_HEIGHT: f32 = 46.;
+const PIP_FOOTER_HEIGHT: f32 = 38.;
 /// How many cards the collapsed pile draws; the rest are counted on its badge.
 const PILE_DEPTH: usize = 3;
 /// How far each card in the collapsed pile sits up and to the left of the one in front of it.
-const PILE_STEP: f32 = 7.;
+const PILE_STEP: f32 = 4.;
 /// Keeps the pile fanned out while the pointer crosses the gaps between cards.
 const PILE_HOVER_OUT_DELAY: Duration = Duration::from_millis(250);
 
@@ -194,45 +197,11 @@ pub fn render_stage<A: Action + Clone>(
     if playing {
         picture_element = forward_input(picture_element, options.focused, wrap);
     }
-    // The controls over the picture take their own clicks; in the default broadcast mode a click
-    // on them would also reach a playing preview underneath.
+    // The approval banner over the picture takes its own clicks; in the default broadcast mode a
+    // click on it would also reach a playing preview underneath.
     let mut picture = Stack::new()
         .with_event_dispatch_mode(EventDispatchMode::Waterfall)
         .with_child(picture_element);
-    picture.add_positioned_child(
-        render_badge(options.agent_step, playing, appearance),
-        OffsetPositioning::offset_from_parent(
-            vec2f(-12., 12.),
-            ParentOffsetBounds::ParentByPosition,
-            ParentAnchor::TopRight,
-            ChildAnchor::TopRight,
-        ),
-    );
-    picture.add_positioned_child(
-        render_bar(&options, front_preview, mouse_states, wrap, appearance),
-        OffsetPositioning::offset_from_parent(
-            vec2f(0., -12.),
-            ParentOffsetBounds::ParentByPosition,
-            ParentAnchor::BottomMiddle,
-            ChildAnchor::BottomMiddle,
-        ),
-    );
-    if cards.len() > 1 {
-        let size = if options.in_picture_in_picture {
-            PileSize::SMALL
-        } else {
-            PileSize::REGULAR
-        };
-        picture.add_positioned_child(
-            render_pile(cards, front, size, streams, mouse_states, wrap, appearance),
-            OffsetPositioning::offset_from_parent(
-                vec2f(-12., -12.),
-                ParentOffsetBounds::ParentByPosition,
-                ParentAnchor::BottomRight,
-                ChildAnchor::BottomRight,
-            ),
-        );
-    }
     if let Some(app_name) = options.approval {
         picture.add_positioned_child(
             render_approval(app_name, mouse_states, wrap, appearance),
@@ -244,14 +213,75 @@ pub fn render_stage<A: Action + Clone>(
             ),
         );
     }
-
-    let mut picture = Container::new(picture.finish()).with_uniform_padding(10.);
+    let mut picture = Container::new(picture.finish())
+        .with_padding_top(10.)
+        .with_horizontal_padding(10.);
     if options.agent_step.is_some() {
         picture = picture.with_border(Border::all(2.).with_border_fill(palette.agent));
     }
-    Container::new(picture.finish())
-        .with_background(palette.background)
-        .finish()
+
+    let (footer_height, pile_size) = if options.in_picture_in_picture {
+        (PIP_FOOTER_HEIGHT, PileSize::SMALL)
+    } else {
+        (FOOTER_HEIGHT, PileSize::REGULAR)
+    };
+    // The footer keeps the controls off the picture: the badge on the left, the capsule in the
+    // middle and the pile on the right, on one line.
+    let mut footer = Stack::new()
+        .with_event_dispatch_mode(EventDispatchMode::Waterfall)
+        .with_child(
+            ConstrainedBox::new(
+                Align::new(render_bar(
+                    &options,
+                    front_preview,
+                    mouse_states,
+                    wrap,
+                    appearance,
+                ))
+                .finish(),
+            )
+            .with_height(footer_height)
+            .finish(),
+        );
+    footer.add_positioned_child(
+        render_badge(options.agent_step, playing, appearance),
+        OffsetPositioning::offset_from_parent(
+            vec2f(12., 0.),
+            ParentOffsetBounds::ParentByPosition,
+            ParentAnchor::MiddleLeft,
+            ChildAnchor::MiddleLeft,
+        ),
+    );
+    if cards.len() > 1 {
+        // Anchored at the bottom so the pile fans out upward, over the picture, while hovered.
+        footer.add_positioned_child(
+            render_pile(
+                cards,
+                front,
+                pile_size,
+                streams,
+                mouse_states,
+                wrap,
+                appearance,
+            ),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-12., -((footer_height - pile_size.collapsed_height()) / 2.)),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::BottomRight,
+            ),
+        );
+    }
+
+    Container::new(
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(Expanded::new(1., picture.finish()).finish())
+            .with_child(footer.finish())
+            .finish(),
+    )
+    .with_background(palette.background)
+    .finish()
 }
 
 fn render_picture<A: Action + Clone>(
@@ -526,6 +556,9 @@ fn render_bar<A: Action + Clone>(
         Some(Source::Window(_)) => {
             "Playing: your pointer and keys go to the window, which stays behind Warp"
         }
+        Some(Source::Simulator(_)) => {
+            "Playing: your pointer and keys go to the simulator, as touches and its keyboard"
+        }
         Some(Source::Browser { .. }) | None => "Playing: your pointer and keys go to the page",
     };
     let switch = Container::new(
@@ -798,12 +831,17 @@ struct PileSize {
 }
 
 impl PileSize {
+    /// The collapsed pile's height, with every card it can show.
+    fn collapsed_height(self) -> f32 {
+        self.thumbnail.1 + (PILE_DEPTH - 1) as f32 * PILE_STEP
+    }
+
     const REGULAR: Self = Self {
-        thumbnail: (112., 63.),
+        thumbnail: (52., 29.),
         card: (152., 86.),
     };
     const SMALL: Self = Self {
-        thumbnail: (72., 41.),
+        thumbnail: (40., 22.),
         card: (104., 59.),
     };
 }

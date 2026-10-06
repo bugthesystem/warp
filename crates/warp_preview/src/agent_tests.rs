@@ -234,3 +234,20 @@ fn only_input_tools_act() {
         .acts()
     );
 }
+
+#[test]
+fn opens_a_simulator_by_name() {
+    assert_eq!(
+        PreviewCommand::from_tool_call("preview_open", &args(json!({"device": "iPhone 17 Pro"}))),
+        Ok(PreviewCommand::Open(OpenTarget::Device(
+            "iPhone 17 Pro".to_owned()
+        )))
+    );
+    assert!(
+        PreviewCommand::from_tool_call(
+            "preview_open",
+            &args(json!({"device": "iPhone 17", "window": 1}))
+        )
+        .is_err()
+    );
+}

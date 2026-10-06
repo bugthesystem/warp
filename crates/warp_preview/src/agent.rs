@@ -18,8 +18,8 @@ pub const DEFAULT_LOG_LINES: usize = 40;
 const DRAG_STEPS: u32 = 8;
 
 pub const SERVER_INSTRUCTIONS: &str = "Preview tools show other programs live in a Warp preview \
-pane: a web page in a headless browser, or another app's window such as a game engine, a game or \
-a simulator. Call preview_targets to see what can be shown, preview_open to show it, then \
+pane: a web page in a headless browser, another app's window such as a game engine or a game, or \
+an iOS simulator (preview_open device=<name>), which runs without its own window. Call preview_targets to see what can be shown, preview_open to show it, then \
 preview_look to see the picture and recent log in one call. preview_click, preview_drag, \
 preview_scroll, preview_type and preview_key act on the preview the way the user's pointer and \
 keyboard would, without moving the user's own pointer; their x and y are pixels in the picture \
@@ -72,6 +72,8 @@ pub enum PreviewCommand {
 pub enum OpenTarget {
     Url(String),
     Window(u32),
+    /// An iOS simulator, by name or UDID.
+    Device(String),
 }
 
 /// What a preview tool returns: text, and a JPEG picture when there is one.
@@ -99,6 +101,9 @@ impl PreviewCommand {
             Self::Targets => None,
             Self::Open(OpenTarget::Url(url)) => Some(format!("Opening {url} in a preview")),
             Self::Open(OpenTarget::Window(_)) => Some("Opening a window in a preview".to_owned()),
+            Self::Open(OpenTarget::Device(device)) => {
+                Some(format!("Starting {device} in a preview"))
+            }
             Self::Screenshot { .. } | Self::Look { .. } => {
                 Some("Looking at the preview".to_owned())
             }
@@ -214,13 +219,15 @@ impl PreviewCommand {
             "preview_open" => {
                 let url = optional_string(args, "url")?;
                 let window = optional_u64(args, "window")?;
-                match (url, window) {
-                    (Some(url), None) => Ok(Self::Open(OpenTarget::Url(url))),
-                    (None, Some(window)) => u32::try_from(window)
+                let device = optional_string(args, "device")?;
+                match (url, window, device) {
+                    (Some(url), None, None) => Ok(Self::Open(OpenTarget::Url(url))),
+                    (None, Some(window), None) => u32::try_from(window)
                         .map(|window| Self::Open(OpenTarget::Window(window)))
                         .map_err(|_| "`window` is not a window id".to_owned()),
-                    (Some(_), Some(_)) => Err("Pass either `url` or `window`, not both".to_owned()),
-                    (None, None) => Err("Pass `url` or `window`".to_owned()),
+                    (None, None, Some(device)) => Ok(Self::Open(OpenTarget::Device(device))),
+                    (None, None, None) => Err("Pass `url`, `window` or `device`".to_owned()),
+                    _ => Err("Pass only one of `url`, `window` and `device`".to_owned()),
                 }
             }
             "preview_screenshot" => Ok(Self::Screenshot {
@@ -301,20 +308,22 @@ pub fn tool_definitions() -> Vec<(&'static str, &'static str, Value, &'static [&
     vec![
         (
             "preview_targets",
-            "List what can be shown in a preview: open previews with their ids, and other apps' \
-             windows (app, title, size, window id). Any URL can also be previewed in a headless \
-             browser.",
+            "List what can be shown in a preview: open previews with their ids, other apps' \
+             windows (app, title, size, window id) and iOS simulators. Any URL can also be \
+             previewed in a headless browser.",
             json!({}),
             &[],
         ),
         (
             "preview_open",
-            "Show a web page or another app's window in a Warp preview pane, next to the \
-             terminal. Adds to the open preview pane's stack if there is one. Returns the new \
+            "Show a web page, another app's window or an iOS simulator in a Warp preview pane, \
+             next to the terminal. A simulator is booted if needed and runs without its own \
+             window. Adds to the open preview pane's stack if there is one. Returns the new \
              preview's id.",
             json!({
                 "url": {"type": "string", "description": "A page to load in a headless browser, such as a local dev server."},
-                "window": {"type": "integer", "minimum": 0, "description": "A window id from preview_targets."}
+                "window": {"type": "integer", "minimum": 0, "description": "A window id from preview_targets."},
+                "device": {"type": "string", "description": "An iOS simulator's name or UDID from preview_targets, such as iPhone 17 Pro."}
             }),
             &[],
         ),

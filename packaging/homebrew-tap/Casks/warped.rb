@@ -20,8 +20,8 @@ cask "warped" do
 
   zap trash: [
     "~/.warp-oss",
+    "~/Library/Application Support/dev.bugthesystem.Warped",
     "~/Library/Preferences/dev.bugthesystem.Warped.plist",
-    "~/Library/Preferences/dev.warp.WarpOss.plist",
   ]
 
   caveats <<~EOS

@@ -13,6 +13,18 @@ pub(crate) fn commands(event: &InputEvent, viewport: (u32, u32)) -> Vec<(&'stati
         )
     };
     match event {
+        InputEvent::Move { at } => {
+            let (x, y) = to_page(*at);
+            vec![mouse(
+                "mouseMoved",
+                x,
+                y,
+                "none",
+                0,
+                0,
+                Modifiers::default(),
+            )]
+        }
         InputEvent::Drag { at } => {
             let (x, y) = to_page(*at);
             vec![mouse(

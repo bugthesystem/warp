@@ -527,10 +527,7 @@ fn open_tab(
     url: Option<String>,
     ctx: &mut ModelContext<BrowserAgent>,
 ) -> Result<(u64, ViewHandle<BrowserView>), String> {
-    let window_id = ctx
-        .windows()
-        .active_window()
-        .ok_or_else(|| "No Warp window is open".to_owned())?;
+    let window_id = super::agent_window(ctx).ok_or_else(|| "No Warp window is open".to_owned())?;
 
     let current_view = BrowserViewRegistry::as_ref(ctx)
         .resolve(None, ctx)
