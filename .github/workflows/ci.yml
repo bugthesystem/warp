@@ -849,8 +849,10 @@ jobs:
     runs-on: ubuntu-slim
     # This must run unconditionally on drafts so a draft PR is never treated as passing CI; the
     # repo-sync/* and non-warpdotdev-owner skips above remain a deliberate exception to that.
+    # Forks of warp skip every job above (see `params`), so this check would only fail on their drafts.
     if: >-
       !cancelled() &&
+      github.repository_owner == 'warpdotdev' &&
       (needs.params.result != 'skipped' || github.event.pull_request.draft == true)
     needs:
       - params
