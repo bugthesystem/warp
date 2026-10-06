@@ -27,7 +27,7 @@ pub(super) fn set_playing<V: View>(
             .get(front)
             .and_then(|preview| match &preview.source {
                 Source::Window(window) => Some(window.window_id),
-                Source::Browser { .. } => None,
+                Source::Browser { .. } | Source::Simulator(_) => None,
             });
     if let (true, Some(window_id)) = (playing, window_id) {
         if !warp_preview::window::has_input_permission() {

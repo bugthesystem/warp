@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
 use warp_preview::agent::{OpenTarget, PreviewCommand, PreviewOutput, PreviewToolRequest};
+use warp_preview::simulator::SimulatorEntry;
 use warp_preview::window::WindowEntry;
 use warp_preview::{Source, WindowSource};
 use warpui::r#async::Timer;
@@ -24,6 +25,9 @@ type ToolResult = Result<PreviewOutput, String>;
 type Reply = async_channel::Sender<ToolResult>;
 
 const APPROVED_SOURCES_FILE_NAME: &str = "preview-agent-sources.json";
+
+/// Simulators are approved as the Simulator app, so allowing its window allows its devices too.
+const SIMULATOR_APP_ID: &str = "com.apple.iphonesimulator";
 
 /// How long `preview_open` waits for a first picture before replying without one.
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(8);
@@ -165,12 +169,43 @@ impl PreviewAgent {
             PreviewCommand::Targets => {
                 let previews = list_previews(ctx);
                 ctx.spawn(
-                    async { warp_preview::window::list_windows() },
-                    move |_, windows, _| {
+                    async {
+                        (
+                            warp_preview::window::list_windows(),
+                            warp_preview::simulator::list_simulators(),
+                        )
+                    },
+                    move |_, (windows, simulators), _| {
                         let _ = reply.try_send(Ok(PreviewOutput {
-                            text: format_targets(&previews, windows),
+                            text: format_targets(&previews, windows, simulators),
                             jpeg: None,
                         }));
+                    },
+                );
+            }
+            PreviewCommand::Open(OpenTarget::Device(device)) => {
+                ctx.spawn(
+                    async { warp_preview::simulator::list_simulators() },
+                    move |me, simulators, ctx| {
+                        let simulators = match simulators {
+                            Ok(simulators) => simulators,
+                            Err(err) => {
+                                let _ = reply.try_send(Err(err.to_string()));
+                                return;
+                            }
+                        };
+                        let Some(simulator) = simulators.into_iter().find(|entry| {
+                            entry.source.udid.eq_ignore_ascii_case(&device)
+                                || entry.source.name.eq_ignore_ascii_case(&device)
+                        }) else {
+                            let _ = reply.try_send(Err(format!(
+                                "No simulator named {device}. Call preview_targets for the list."
+                            )));
+                            return;
+                        };
+                        let source = Source::Simulator(simulator.source);
+                        let access = me.source_access(&source);
+                        me.open_with_access(source, access, reply, ctx);
                     },
                 );
             }
@@ -275,17 +310,22 @@ impl PreviewAgent {
                 _ => Access::Allowed,
             },
             Source::Window(window) => self.window_access(window),
+            Source::Simulator(_) => self.app_access(SIMULATOR_APP_ID, "Simulator"),
         }
     }
 
     fn window_access(&self, window: &WindowSource) -> Access {
-        let key = format!("app:{}", window.app_id);
+        self.app_access(&window.app_id, &window.app_name)
+    }
+
+    fn app_access(&self, app_id: &str, app_name: &str) -> Access {
+        let key = format!("app:{app_id}");
         if self.approved.allows(&key) {
             Access::Allowed
         } else {
             Access::NeedsApproval {
                 key,
-                name: window.app_name.clone(),
+                name: app_name.to_owned(),
             }
         }
     }
@@ -338,6 +378,7 @@ impl PreviewAgent {
         let step = PreviewCommand::Open(match &source {
             Source::Browser { url } => OpenTarget::Url(url.clone()),
             Source::Window(window) => OpenTarget::Window(window.window_id),
+            Source::Simulator(simulator) => OpenTarget::Device(simulator.name.clone()),
         })
         .step();
         let label = source.label();
@@ -687,6 +728,7 @@ fn list_previews(ctx: &ModelContext<PreviewAgent>) -> Vec<String> {
 fn format_targets(
     previews: &[String],
     windows: Result<Vec<WindowEntry>, warp_preview::Error>,
+    simulators: Result<Vec<SimulatorEntry>, warp_preview::Error>,
 ) -> String {
     let mut text = String::new();
     if previews.is_empty() {
@@ -717,6 +759,23 @@ fn format_targets(
         }
         Err(warp_preview::Error::Unsupported) => {}
         Err(err) => text.push_str(&format!("\nApp windows are unavailable: {err}.\n")),
+    }
+    match simulators {
+        Ok(simulators) if !simulators.is_empty() => {
+            text.push_str(
+                "\niOS simulators (open one with preview_open device=<name>; it runs without its \
+                 own window):\n",
+            );
+            for simulator in simulators {
+                let state = if simulator.booted { ", booted" } else { "" };
+                text.push_str(&format!(
+                    "- {} ({}{state}), udid {}\n",
+                    simulator.source.name, simulator.runtime, simulator.source.udid
+                ));
+            }
+        }
+        Ok(_) | Err(warp_preview::Error::Unsupported) => {}
+        Err(err) => text.push_str(&format!("\nSimulators are unavailable: {err}.\n")),
     }
     text.push_str(
         "\nAny URL, such as a local dev server, can be opened with preview_open url=<url>.",

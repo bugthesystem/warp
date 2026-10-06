@@ -1,7 +1,7 @@
 //! Live previews of other programs for Warp's preview pane.
 //!
 //! A preview is a stream of frames from a [`Source`]: a page in a headless Chromium that Warp
-//! starts, or another app's window on macOS. Streams run on their own threads and report through
+//! starts, another app's window on macOS, or an iOS simulator streamed headlessly with Baguette. Streams run on their own threads and report through
 //! an [`async_channel`] of [`StreamEvent`]s; frames are JPEG so the UI can hand them straight to
 //! its image cache. Nothing here depends on WarpUI.
 
@@ -11,6 +11,7 @@ pub mod geometry;
 pub mod input;
 #[cfg(not(target_family = "wasm"))]
 pub mod jpeg;
+pub mod simulator;
 mod stream;
 pub mod window;
 
@@ -25,6 +26,16 @@ pub enum Source {
     Browser { url: String },
     /// Another app's window, captured without bringing it forward. macOS only.
     Window(WindowSource),
+    /// An iOS simulator, booted and streamed without the Simulator app's window. macOS only.
+    Simulator(SimulatorSource),
+}
+
+/// An iOS simulator device, as listed by [`simulator::list_simulators`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SimulatorSource {
+    pub udid: String,
+    /// The device's name, such as "iPhone 17 Pro".
+    pub name: String,
 }
 
 /// A window of another app, as listed by [`window::list_windows`].
@@ -47,6 +58,7 @@ impl Source {
             Source::Browser { url } => url.clone(),
             Source::Window(window) if window.title.is_empty() => window.app_name.clone(),
             Source::Window(window) => format!("{} · {}", window.app_name, window.title),
+            Source::Simulator(simulator) => format!("{} · Simulator", simulator.name),
         }
     }
 }
@@ -98,6 +110,8 @@ pub enum Error {
     NoChromium,
     #[error("The window is no longer open")]
     WindowGone,
+    #[error("Simulator previews need Baguette. Install it with `brew install baguette`")]
+    NoBaguette,
     #[error("{0}")]
     Other(String),
 }

@@ -86,6 +86,7 @@ pub fn start(
         Source::Window(window_source) => {
             crate::window::start_capture(window_source.clone(), rate, events)
         }
+        Source::Simulator(simulator) => crate::simulator::start(simulator.clone(), rate, events),
     }
     #[cfg(target_family = "wasm")]
     {

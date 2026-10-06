@@ -526,6 +526,9 @@ fn render_bar<A: Action + Clone>(
         Some(Source::Window(_)) => {
             "Playing: your pointer and keys go to the window, which stays behind Warp"
         }
+        Some(Source::Simulator(_)) => {
+            "Playing: your pointer and keys go to the simulator, as touches and its keyboard"
+        }
         Some(Source::Browser { .. }) | None => "Playing: your pointer and keys go to the page",
     };
     let switch = Container::new(
