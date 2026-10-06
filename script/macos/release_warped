@@ -13,6 +13,7 @@ set -eo pipefail
 
 VERSION="${1:?Usage: script/macos/release_warped <version> [aarch64|x86_64]}"
 ARCH="${2:-aarch64}"
+BUNDLE_ID="dev.bugthesystem.Warped"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -44,6 +45,13 @@ PLIST="$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "Warped" "$PLIST"
 plutil -replace CFBundleDisplayName -string "Warped" "$PLIST" 2>/dev/null \
   || plutil -insert CFBundleDisplayName -string "Warped" "$PLIST"
+# Its own bundle ID keeps Warped's permissions, preferences and state apart from Warp OSS builds,
+# which macOS would otherwise treat as the same app.
+plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$PLIST"
+DOCK_TILE_PLIST="$APP/Contents/PlugIns/WarpDockTilePlugin.docktileplugin/Contents/Info.plist"
+if [[ -f "$DOCK_TILE_PLIST" ]]; then
+  plutil -replace MainAppBundleIdentifier -string "$BUNDLE_ID" "$DOCK_TILE_PLIST"
+fi
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
 plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
 
