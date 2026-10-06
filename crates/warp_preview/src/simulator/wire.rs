@@ -1,5 +1,7 @@
 //! What crosses the line to Baguette and simctl: the device list, the MJPEG frame stream, and the
 //! JSON gestures `baguette input` reads.
+// Only `run`, which is macOS-only, streams and sends input; other platforms just list devices.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use std::io::{self, BufRead};
 
