@@ -1,9 +1,13 @@
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use warp_browser::annotation::{PageAnnotation, annotate_script, format_annotations};
+use warp_browser::annotation::{
+    PageAnnotation, SEND_NOTES_ACTION, annotate_script, format_annotations,
+};
 use warp_browser::local_servers::LocalServer;
+use warp_browser::screenshot;
 use warp_browser::{WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
@@ -65,6 +69,8 @@ const NEW_TAB_PAGE_WIDTH: f32 = 560.;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
     Pane(PaneEvent),
+    /// Text for the agent working next to this pane, such as notes or a screenshot's path.
+    SendToAgent(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +87,8 @@ pub enum BrowserViewAction {
     ResolveAgentApproval(AgentApproval),
     ToggleAgentAutoApprove,
     ToggleAnnotate,
-    CopyScreenshot,
+    TakeScreenshot,
+    SendNotes,
     SetAgentPaused(bool),
     StopAgent,
 }
@@ -125,8 +132,11 @@ pub struct BrowserView {
     annotating: bool,
     annotate_button: MouseStateHandle,
     screenshot_button: MouseStateHandle,
+    send_notes_button: MouseStateHandle,
     /// Confirmation shown briefly in the toolbar.
     notice: Option<&'static str>,
+    /// The file the latest screenshot was saved to, which its preview's buttons act on.
+    last_screenshot: Option<PathBuf>,
     /// What agents did in this pane recently, oldest first. Cleared once they go quiet.
     agent_steps: Vec<String>,
     /// Bumped with each step, so only the latest step's timer clears the steps.
@@ -225,7 +235,9 @@ impl BrowserView {
             annotating: false,
             annotate_button: MouseStateHandle::default(),
             screenshot_button: MouseStateHandle::default(),
+            send_notes_button: MouseStateHandle::default(),
             notice: None,
+            last_screenshot: None,
             agent_steps: Vec::new(),
             agent_step_generation: 0,
             pause_agent_button: MouseStateHandle::default(),
@@ -513,11 +525,15 @@ impl BrowserView {
         });
     }
 
-    /// Copies a screenshot of the active page to the clipboard, for pasting into an agent.
-    fn copy_screenshot(&self, ctx: &mut ViewContext<Self>) {
+    /// Saves a screenshot of the active page, copies it, and previews it in the page's corner,
+    /// like macOS does.
+    fn take_screenshot(&self, ctx: &mut ViewContext<Self>) {
         let Some(placed) = &self.active().webview else {
             return;
         };
+        let _ = placed
+            .webview
+            .evaluate(screenshot::REMOVE_PREVIEW_SCRIPT, |_| {});
         let (png_tx, png_rx) = futures::channel::oneshot::channel();
         placed.webview.snapshot_png(move |png| {
             let _ = png_tx.send(png);
@@ -525,23 +541,77 @@ impl BrowserView {
         ctx.spawn(
             async move { png_rx.await.ok().flatten() },
             |me, png, ctx| {
-                let message = match png {
-                    Some(data) => {
-                        ctx.clipboard().write(ClipboardContent {
-                            images: Some(vec![ImageData {
-                                data,
-                                mime_type: "image/png".to_owned(),
-                                filename: Some("screenshot.png".to_owned()),
-                            }]),
-                            ..Default::default()
-                        });
-                        "Screenshot copied"
-                    }
-                    None => "Couldn't take a screenshot",
+                let Some(data) = png else {
+                    me.show_notice("Couldn't take a screenshot", ctx);
+                    return;
                 };
-                me.show_notice(message, ctx);
+                let path = screenshot_path();
+                if let Err(err) = std::fs::write(&path, &data) {
+                    log::warn!("Failed to save a browser screenshot: {err:#}");
+                    me.show_notice("Couldn't save the screenshot", ctx);
+                    return;
+                }
+                ctx.clipboard().write(png_clipboard_content(data.clone()));
+                if let Some(placed) = &me.active().webview {
+                    let file_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let _ = placed
+                        .webview
+                        .evaluate(&screenshot::preview_script(&data, &file_name), |_| {});
+                }
+                me.last_screenshot = Some(path);
+                me.show_notice("Screenshot saved and copied", ctx);
             },
         );
+    }
+
+    /// Pastes the notes no agent has read yet into the agent's terminal.
+    fn send_notes(&mut self, ctx: &mut ViewContext<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let annotations = super::BrowserAgent::handle(ctx)
+                .update(ctx, |agent, ctx| agent.take_annotations(ctx));
+            if annotations.is_empty() {
+                self.show_notice("No notes to send", ctx);
+                return;
+            }
+            ctx.emit(BrowserViewEvent::SendToAgent(format_annotations(
+                &annotations,
+            )));
+            self.show_notice("Notes sent to your agent", ctx);
+        }
+    }
+
+    fn handle_page_action(&mut self, action: &str, ctx: &mut ViewContext<Self>) {
+        match action {
+            SEND_NOTES_ACTION => self.send_notes(ctx),
+            screenshot::COPY_ACTION => {
+                let Some(path) = &self.last_screenshot else {
+                    return;
+                };
+                match std::fs::read(path) {
+                    Ok(data) => {
+                        ctx.clipboard().write(png_clipboard_content(data));
+                        self.show_notice("Screenshot copied", ctx);
+                    }
+                    Err(err) => log::warn!("Failed to read a browser screenshot: {err:#}"),
+                }
+            }
+            screenshot::SEND_ACTION => {
+                if let Some(path) = &self.last_screenshot {
+                    ctx.emit(BrowserViewEvent::SendToAgent(path.display().to_string()));
+                    self.show_notice("Screenshot sent to your agent", ctx);
+                }
+            }
+            screenshot::REVEAL_ACTION => {
+                if let Some(path) = &self.last_screenshot {
+                    reveal_in_finder(path);
+                }
+            }
+            _ => log::warn!("Ignored unknown browser page action `{action}`"),
+        }
     }
 
     fn navigate_active_tab(&self, navigate: fn(&WebView) -> Result<(), warp_browser::Error>) {
@@ -654,18 +724,16 @@ impl BrowserView {
                 }
             }
             WebViewEvent::PageFocused => {}
-            WebViewEvent::Annotation(json) => {
-                if let Some(annotation) = PageAnnotation::parse(&json) {
-                    ctx.clipboard()
-                        .write(ClipboardContent::plain_text(format_annotations(
-                            std::slice::from_ref(&annotation),
-                        )));
+            WebViewEvent::Annotation(json) => match PageAnnotation::parse(&json) {
+                Some(annotation) => {
+                    log::info!("Received a browser annotation");
                     #[cfg(not(target_family = "wasm"))]
                     super::BrowserAgent::handle(ctx)
                         .update(ctx, |agent, ctx| agent.add_annotation(annotation, ctx));
-                    self.show_notice("Note copied for your agent", ctx);
                 }
-            }
+                None => log::warn!("Ignored a malformed browser annotation"),
+            },
+            WebViewEvent::PageAction(action) => self.handle_page_action(&action, ctx),
             WebViewEvent::AnnotateExited => {
                 if index == self.active_tab {
                     self.annotating = false;
@@ -1079,6 +1147,10 @@ impl BrowserView {
     fn render_toolbar(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let active = self.active();
+        #[cfg(not(target_family = "wasm"))]
+        let unread_notes = super::BrowserAgent::as_ref(app).unread_annotations();
+        #[cfg(target_family = "wasm")]
+        let unread_notes = 0;
         let url_field = appearance
             .ui_builder()
             .text_input(self.url_editor.clone())
@@ -1146,24 +1218,42 @@ impl BrowserView {
                 .with_color(appearance.theme().accent().into())
                 .finish()
             }))
-            .with_child(
-                icon_button(
-                    appearance,
-                    Icon::MessagePlusSquare,
-                    self.annotating,
-                    self.annotate_button.clone(),
-                )
-                .build()
-                .on_click(|ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::ToggleAnnotate))
-                .finish(),
-            )
-            .with_child(nav_button(
+            .with_child(toolbar_pill(
                 appearance,
-                Icon::Image,
-                &self.screenshot_button,
-                active.webview.is_some(),
-                BrowserViewAction::CopyScreenshot,
+                &self.annotate_button,
+                Icon::MessagePlusSquare,
+                if self.annotating {
+                    "Annotating"
+                } else {
+                    "Annotate"
+                },
+                self.annotating,
+                "Point at parts of the page and leave notes for your agent.",
+                BrowserViewAction::ToggleAnnotate,
             ))
+            .with_child(toolbar_pill(
+                appearance,
+                &self.screenshot_button,
+                Icon::Image,
+                "Screenshot",
+                false,
+                "Save a screenshot of the page, copy it, and preview it to send to your agent.",
+                BrowserViewAction::TakeScreenshot,
+            ))
+            .with_children((unread_notes > 0).then(|| {
+                toolbar_pill(
+                    appearance,
+                    &self.send_notes_button,
+                    Icon::MessagePlusSquare,
+                    format!(
+                        "Send {unread_notes} note{} to agent",
+                        if unread_notes == 1 { "" } else { "s" }
+                    ),
+                    true,
+                    "Paste your notes into the agent's terminal.",
+                    BrowserViewAction::SendNotes,
+                )
+            }))
             .with_child(self.render_auto_approve_switch(appearance, app))
             .finish()
     }
@@ -1182,7 +1272,6 @@ impl BrowserView {
             let _ = app;
             false
         };
-        let theme = appearance.theme();
         let (label, tooltip) = if auto_approve {
             (
                 "Agent: Auto",
@@ -1194,64 +1283,15 @@ impl BrowserView {
                 "Agents ask before using sites that are not local. Click to approve automatically.",
             )
         };
-        let (text_color, background, border) = if auto_approve {
-            (
-                theme.accent(),
-                theme.accent().with_opacity(15),
-                theme.accent(),
-            )
-        } else {
-            (
-                theme.nonactive_ui_text_color(),
-                theme.surface_2(),
-                theme.outline(),
-            )
-        };
-        let ui_builder = appearance.ui_builder().clone();
-        let font_family = appearance.ui_font_family();
-        let font_size = appearance.ui_font_size();
-        Hoverable::new(self.auto_approve_button.clone(), move |state| {
-            let pill = Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(6.)
-                    .with_child(
-                        ConstrainedBox::new(Icon::AgentMode.to_warpui_icon(text_color).finish())
-                            .with_width(TAB_ICON_SIZE)
-                            .with_height(TAB_ICON_SIZE)
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(label, font_family, font_size)
-                            .with_color(text_color.into())
-                            .finish(),
-                    )
-                    .finish(),
-            )
-            .with_horizontal_padding(10.)
-            .with_vertical_padding(4.)
-            .with_background(background)
-            .with_border(Border::all(1.).with_border_fill(border))
-            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
-            if state.is_hovered() {
-                let mut stack = Stack::new().with_child(pill.finish());
-                // Beside the pill rather than below it: anything drawn over the page hides it.
-                stack.add_positioned_overlay_child(
-                    ui_builder.tool_tip(tooltip.to_owned()).build().finish(),
-                    OffsetPositioning::offset_from_parent(
-                        vec2f(-6., 0.),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::MiddleLeft,
-                        ChildAnchor::MiddleRight,
-                    ),
-                );
-                stack.finish()
-            } else {
-                pill.finish()
-            }
-        })
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::ToggleAgentAutoApprove))
-        .finish()
+        toolbar_pill(
+            appearance,
+            &self.auto_approve_button,
+            Icon::AgentMode,
+            label,
+            auto_approve,
+            tooltip,
+            BrowserViewAction::ToggleAgentAutoApprove,
+        )
     }
 }
 
@@ -1394,6 +1434,120 @@ fn header_button(
             ctx.dispatch_typed_action(HeaderAction::CustomAction(action.clone()))
         })
         .finish()
+}
+
+/// A rounded toolbar button with an icon and a label, in the accent color while `highlighted`.
+/// Its tooltip sits beside it, since anything drawn over the page hides the page.
+fn toolbar_pill(
+    appearance: &Appearance,
+    mouse_state: &MouseStateHandle,
+    icon: Icon,
+    label: impl Into<String>,
+    highlighted: bool,
+    tooltip: &'static str,
+    action: BrowserViewAction,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let (text_color, background, hover_background, border) = if highlighted {
+        (
+            theme.accent(),
+            theme.accent().with_opacity(15),
+            theme.accent().with_opacity(25),
+            theme.accent(),
+        )
+    } else {
+        (
+            theme.nonactive_ui_text_color(),
+            theme.surface_2(),
+            theme.surface_3(),
+            theme.outline(),
+        )
+    };
+    let label = label.into();
+    let ui_builder = appearance.ui_builder().clone();
+    let font_family = appearance.ui_font_family();
+    let font_size = appearance.ui_font_size();
+    Hoverable::new(mouse_state.clone(), move |state| {
+        let pill = Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.)
+                .with_child(
+                    ConstrainedBox::new(icon.to_warpui_icon(text_color).finish())
+                        .with_width(TAB_ICON_SIZE)
+                        .with_height(TAB_ICON_SIZE)
+                        .finish(),
+                )
+                .with_child(
+                    Text::new_inline(label.clone(), font_family, font_size)
+                        .with_color(text_color.into())
+                        .finish(),
+                )
+                .finish(),
+        )
+        .with_horizontal_padding(10.)
+        .with_vertical_padding(4.)
+        .with_background(if state.is_hovered() {
+            hover_background
+        } else {
+            background
+        })
+        .with_border(Border::all(1.).with_border_fill(border))
+        .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+        .finish();
+        if !state.is_hovered() {
+            return pill;
+        }
+        let mut stack = Stack::new().with_child(pill);
+        stack.add_positioned_overlay_child(
+            ui_builder.tool_tip(tooltip.to_owned()).build().finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-6., 0.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::MiddleLeft,
+                ChildAnchor::MiddleRight,
+            ),
+        );
+        stack.finish()
+    })
+    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+    .finish()
+}
+
+fn png_clipboard_content(data: Vec<u8>) -> ClipboardContent {
+    ClipboardContent {
+        images: Some(vec![ImageData {
+            data,
+            mime_type: "image/png".to_owned(),
+            filename: Some("screenshot.png".to_owned()),
+        }]),
+        ..Default::default()
+    }
+}
+
+/// Where a new screenshot is saved: the Desktop, as macOS saves its own, named so agents can take
+/// the path without quoting.
+fn screenshot_path() -> PathBuf {
+    let dir = dirs::desktop_dir()
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(std::env::temp_dir);
+    dir.join(format!(
+        "warp-browser-{}.png",
+        chrono::Local::now().format("%Y-%m-%d-%H%M%S")
+    ))
+}
+
+fn reveal_in_finder(path: &Path) {
+    #[cfg(target_os = "macos")]
+    if let Err(err) = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+    {
+        log::warn!("Failed to show a browser screenshot in Finder: {err:#}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = path;
 }
 
 fn nav_button(
@@ -1548,7 +1702,8 @@ impl TypedActionView for BrowserView {
                 ctx.notify();
             }
             BrowserViewAction::ToggleAnnotate => self.set_annotating(!self.annotating, ctx),
-            BrowserViewAction::CopyScreenshot => self.copy_screenshot(ctx),
+            BrowserViewAction::TakeScreenshot => self.take_screenshot(ctx),
+            BrowserViewAction::SendNotes => self.send_notes(ctx),
             BrowserViewAction::GoBack => self.navigate_active_tab(WebView::go_back),
             BrowserViewAction::GoForward => self.navigate_active_tab(WebView::go_forward),
             BrowserViewAction::Reload => self.navigate_active_tab(WebView::reload),

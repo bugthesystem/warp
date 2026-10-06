@@ -66,10 +66,17 @@ impl PaneContent for BrowserPane {
         browser_view.update(ctx, |view, ctx| view.set_attached(true, ctx));
         let pane_id = self.id();
 
-        ctx.subscribe_to_view(&browser_view, move |pane_group, _, event, ctx| {
-            let BrowserViewEvent::Pane(pane_event) = event;
-            pane_group.handle_pane_event(pane_id, pane_event, ctx)
-        });
+        ctx.subscribe_to_view(
+            &browser_view,
+            move |pane_group, _, event, ctx| match event {
+                BrowserViewEvent::Pane(pane_event) => {
+                    pane_group.handle_pane_event(pane_id, pane_event, ctx)
+                }
+                BrowserViewEvent::SendToAgent(text) => {
+                    pane_group.paste_into_agent_terminal(text.clone(), ctx);
+                }
+            },
+        );
         ctx.subscribe_to_view(&self.view, move |group, _, event, ctx| {
             group.handle_pane_view_event(pane_id, event, ctx);
         });

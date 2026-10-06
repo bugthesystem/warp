@@ -18,7 +18,7 @@ use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
 use crate::agent::CONSOLE_CAPTURE_SCRIPT;
 use crate::annotation::{ANNOTATE_EXITED_MESSAGE, ANNOTATION_MESSAGE_PREFIX};
-use crate::{Error, WebViewEvent};
+use crate::{Error, PAGE_ACTION_PREFIX, WebViewEvent};
 
 /// Message the focus script posts when the user clicks in the page.
 const PAGE_FOCUSED_MESSAGE: &str = "warp:page-focused";
@@ -82,6 +82,8 @@ impl WebView {
                     on_ipc(WebViewEvent::AnnotateExited);
                 } else if let Some(json) = body.strip_prefix(ANNOTATION_MESSAGE_PREFIX) {
                     on_ipc(WebViewEvent::Annotation(json.to_owned()));
+                } else if let Some(action) = body.strip_prefix(PAGE_ACTION_PREFIX) {
+                    on_ipc(WebViewEvent::PageAction(action.to_owned()));
                 }
             })
             .with_document_title_changed_handler(move |title| {

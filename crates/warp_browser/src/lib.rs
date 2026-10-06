@@ -9,6 +9,7 @@ pub mod agent;
 pub mod annotation;
 pub mod history;
 pub mod local_servers;
+pub mod screenshot;
 pub mod sites;
 mod url_input;
 
@@ -44,7 +45,12 @@ pub enum WebViewEvent {
     Annotation(String),
     /// The user left annotate mode from the page.
     AnnotateExited,
+    /// The user pressed a button Warp put in the page, named after [`PAGE_ACTION_PREFIX`].
+    PageAction(String),
 }
+
+/// Prefix of the message a button Warp put in the page posts, followed by the action's name.
+pub const PAGE_ACTION_PREFIX: &str = "warp:action:";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -110,6 +110,17 @@ impl BrowserAgent {
         agent::router(self.requests_tx.clone(), mcp_token())
     }
 
+    /// How many notes no agent has read yet.
+    pub fn unread_annotations(&self) -> usize {
+        self.annotations.len()
+    }
+
+    /// Removes and returns the notes no agent has read yet.
+    pub fn take_annotations(&mut self, ctx: &mut ModelContext<Self>) -> Vec<PageAnnotation> {
+        ctx.notify();
+        std::mem::take(&mut self.annotations)
+    }
+
     /// Keeps a note for the next `browser_annotations` call.
     pub fn add_annotation(&mut self, annotation: PageAnnotation, ctx: &mut ModelContext<Self>) {
         self.annotations.push(annotation);
@@ -229,7 +240,9 @@ impl BrowserAgent {
         // With no browser pane open there is no Resume button, so nothing is held.
         if self.paused
             && request.command.step().is_some()
-            && BrowserViewRegistry::as_ref(ctx).resolve(None, ctx).is_some()
+            && BrowserViewRegistry::as_ref(ctx)
+                .resolve(None, ctx)
+                .is_some()
         {
             self.held.push(request);
             ctx.notify();

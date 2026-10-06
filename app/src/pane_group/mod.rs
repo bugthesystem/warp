@@ -122,6 +122,7 @@ use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
@@ -7936,6 +7937,32 @@ impl PaneGroup {
     }
 
     /// Filters out any hidden panes that aren't yet deleted (due to undo functionality).
+    /// Pastes `text` into the terminal in this tab that runs a CLI agent, such as Claude Code, or
+    /// into the active terminal session when none does, and focuses that pane. Returns whether a
+    /// terminal received it.
+    pub fn paste_into_agent_terminal(&mut self, text: String, ctx: &mut ViewContext<Self>) -> bool {
+        let terminals: Vec<(PaneId, ViewHandle<TerminalView>)> = self
+            .panes_of::<TerminalPane>()
+            .map(|pane| (pane.terminal_pane_id().into(), pane.terminal_view(ctx)))
+            .filter(|(pane_id, _)| !self.is_pane_hidden_for_close(*pane_id))
+            .collect();
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        let target = terminals
+            .iter()
+            .find(|(_, view)| sessions.session(view.id()).is_some())
+            .or_else(|| {
+                let active = self.active_session_view(ctx)?;
+                terminals.iter().find(|(_, view)| view.id() == active.id())
+            })
+            .cloned();
+        let Some((pane_id, view)) = target else {
+            return false;
+        };
+        view.update(ctx, |view, ctx| view.paste_text(text, ctx));
+        self.focus_pane(pane_id, true, ctx);
+        true
+    }
+
     pub fn terminal_views(&self, ctx: &AppContext) -> Vec<ViewHandle<TerminalView>> {
         self.panes_of::<TerminalPane>()
             .filter(|p| !self.is_pane_hidden_for_close(p.terminal_pane_id().into()))
