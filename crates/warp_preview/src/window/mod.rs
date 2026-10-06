@@ -76,6 +76,21 @@ pub fn list_windows() -> Result<Vec<WindowEntry>, crate::Error> {
     }
 }
 
+/// One still picture of a window, at most `max_side` pixels on its longest side, for showing it
+/// before it is previewed. `None` when the window gave no picture, such as while it is
+/// minimized. Blocks briefly, so call it off the main thread.
+pub fn thumbnail(window_id: u32, max_side: u32) -> Result<Option<crate::Frame>, crate::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::thumbnail(window_id, max_side)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window_id, max_side);
+        Err(crate::Error::Unsupported)
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn start_capture(
     source: WindowSource,

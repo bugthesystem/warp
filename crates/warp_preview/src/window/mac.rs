@@ -186,6 +186,18 @@ fn image_to_frame(image: &CGImage) -> Option<crate::Frame> {
     jpeg::frame_from_rgb(&rgb, width as u32, height as u32)
 }
 
+pub fn thumbnail(window_id: u32, max_side: u32) -> Result<Option<crate::Frame>, Error> {
+    if !available!(macos = 14.0) {
+        return Err(Error::Unsupported);
+    }
+    let window = find_window(window_id)?.ok_or(Error::WindowGone)?;
+    // SAFETY: filter creation on a delivered window.
+    let filter = unsafe {
+        SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
+    };
+    Ok(capture(&filter, max_side))
+}
+
 pub fn start_capture(
     source: WindowSource,
     rate: Rate,

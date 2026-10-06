@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -5,12 +6,15 @@ use warp_browser::local_servers::LocalServer;
 use warp_core::ui::appearance::Appearance;
 use warp_preview::window::WindowEntry;
 use warp_preview::{Rate, Source, WindowSource};
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::r#async::Timer;
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::elements::{
-    Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, Flex, Hoverable, MouseStateHandle, ParentElement, Radius,
+    ScrollbarWidth, Text,
 };
+use warpui::image_cache::ImageType;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -20,6 +24,9 @@ use super::PreviewRegistry;
 use super::stage::{StageAction, StageMouseStates, StageOptions, render_stage};
 use super::streams::{ChromiumState, PreviewId, PreviewStreams};
 use crate::browser::AgentApproval;
+use crate::browser::start_page::{
+    PAGE_WIDTH, grid, page_heading, section_label, server_tile, window_card,
+};
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::{self, HeaderContent};
@@ -29,10 +36,12 @@ use crate::workspace::WorkspaceAction;
 
 const DEFAULT_TITLE: &str = "Preview";
 const URL_FIELD_PLACEHOLDER: &str = "Enter a URL to preview, such as localhost:3000";
-const START_PAGE_WIDTH: f32 = 560.;
-const ROW_ICON_SIZE: f32 = 14.;
 const MAX_LOCAL_SERVERS: usize = 6;
 const MAX_WINDOWS: usize = 12;
+const SERVER_COLUMNS: usize = 3;
+const WINDOW_COLUMNS: usize = 4;
+/// Longest side of the pictures on the start page's window cards, in pixels.
+const THUMBNAIL_MAX_SIDE: u32 = 480;
 const NOTICE_DURATION: Duration = Duration::from_secs(2);
 /// How long an agent's step shows on the badge after its last call.
 const AGENT_STEP_LINGER: Duration = Duration::from_secs(4);
@@ -90,6 +99,9 @@ pub struct PreviewView {
     stage_mouse_states: StageMouseStates,
     local_servers: Vec<LocalServer>,
     windows: WindowList,
+    /// Still pictures of the listed windows, by window id.
+    thumbnails: HashMap<u32, AssetSource>,
+    start_page_scroll: ClippedScrollStateHandle,
     row_buttons: Vec<MouseStateHandle>,
     download_button: MouseStateHandle,
     permission_button: MouseStateHandle,
@@ -144,6 +156,8 @@ impl PreviewView {
             stage_mouse_states: StageMouseStates::default(),
             local_servers: Vec::new(),
             windows: WindowList::Loading,
+            thumbnails: HashMap::new(),
+            start_page_scroll: Default::default(),
             row_buttons: (0..MAX_LOCAL_SERVERS + MAX_WINDOWS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
@@ -326,10 +340,46 @@ impl PreviewView {
             async { warp_preview::window::list_windows() },
             |me, windows, ctx| {
                 me.windows = match windows {
-                    Ok(windows) => WindowList::Listed(windows),
+                    Ok(windows) => {
+                        me.load_thumbnails(&windows, ctx);
+                        WindowList::Listed(windows)
+                    }
                     Err(warp_preview::Error::ScreenRecordingDenied) => WindowList::NeedsPermission,
                     Err(err) => WindowList::Failed(err.to_string()),
                 };
+                ctx.notify();
+            },
+        );
+    }
+
+    /// Captures a still picture of each on-screen window the start page lists, for its card.
+    fn load_thumbnails(&mut self, windows: &[WindowEntry], ctx: &mut ViewContext<Self>) {
+        let window_ids: Vec<u32> = windows
+            .iter()
+            .take(MAX_WINDOWS)
+            .filter(|window| window.on_screen)
+            .map(|window| window.source.window_id)
+            .collect();
+        ctx.spawn(
+            async move {
+                window_ids
+                    .into_iter()
+                    .filter_map(|window_id| {
+                        warp_preview::window::thumbnail(window_id, THUMBNAIL_MAX_SIDE)
+                            .ok()
+                            .flatten()
+                            .map(|frame| (window_id, frame))
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |me, frames, ctx| {
+                for (window_id, frame) in frames {
+                    let id = format!("preview-window-thumbnail-{window_id}");
+                    AssetCache::handle(ctx).update(ctx, |cache, ctx| {
+                        cache.insert_raw_asset_bytes::<ImageType>(id.clone(), &frame.jpeg, ctx);
+                    });
+                    me.thumbnails.insert(window_id, AssetSource::Raw { id });
+                }
                 ctx.notify();
             },
         );
@@ -452,9 +502,10 @@ impl PreviewView {
 
     fn render_start_page(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
         let mut rows = self.row_buttons.iter();
 
-        let mut column = Flex::column().with_spacing(2.);
+        let mut column = Flex::column();
         if !self.cards.is_empty() {
             column.add_child(
                 Container::new(link_button(
@@ -463,41 +514,48 @@ impl PreviewView {
                     PreviewViewAction::BackToStage,
                     appearance,
                 ))
-                .with_margin_bottom(10.)
+                .with_margin_bottom(12.)
                 .finish(),
             );
         }
         column.add_child(
+            Align::new(page_heading(
+                Icon::Laptop,
+                "What do you want to watch?",
+                appearance,
+            ))
+            .finish(),
+        );
+        column.add_child(
             Container::new(url_field(&self.url_editor, appearance))
-                .with_margin_bottom(4.)
+                .with_margin_top(18.)
+                .with_margin_bottom(6.)
                 .finish(),
         );
-        column.add_child(self.render_chromium_status(appearance, app));
+        column.add_child(Align::new(self.render_chromium_status(appearance, app)).finish());
 
         if !self.local_servers.is_empty() {
-            column.add_child(section_heading(
-                Icon::Terminal,
-                "Running on this machine",
-                appearance,
-            ));
-            for (server, mouse_state) in self
+            column.add_child(section_label("Running on this machine", None, appearance));
+            let tiles = self
                 .local_servers
                 .iter()
                 .take(MAX_LOCAL_SERVERS)
                 .zip(rows.by_ref())
-            {
-                column.add_child(start_row(
-                    Icon::Globe,
-                    &warp_browser::display_url(&server.url()),
-                    Some(&server.process),
-                    mouse_state,
-                    PreviewViewAction::OpenUrl(server.url()),
-                    appearance,
-                ));
-            }
+                .map(|(server, mouse_state)| {
+                    server_tile(
+                        Icon::Terminal,
+                        &warp_browser::display_url(&server.url()),
+                        &server.process,
+                        mouse_state,
+                        PreviewViewAction::OpenUrl(server.url()),
+                        appearance,
+                    )
+                })
+                .collect();
+            column.add_child(grid(tiles, SERVER_COLUMNS));
         }
 
-        column.add_child(section_heading(Icon::Laptop, "App windows", appearance));
+        column.add_child(section_label("App windows", None, appearance));
         match &self.windows {
             WindowList::Unsupported => column.add_child(muted_text(
                 "Previewing other apps' windows is available on macOS.",
@@ -536,48 +594,75 @@ impl PreviewView {
                 column.add_child(muted_text("No other app windows are open.", appearance));
             }
             WindowList::Listed(windows) => {
-                for (window, mouse_state) in windows.iter().take(MAX_WINDOWS).zip(rows.by_ref()) {
-                    let detail = match (window.on_screen, window.source.title.is_empty()) {
-                        (false, _) => Some("minimized".to_owned()),
-                        (true, true) => None,
-                        (true, false) => Some(window.source.title.clone()),
-                    };
-                    column.add_child(start_row(
-                        Icon::Laptop,
-                        &window.source.app_name,
-                        detail.as_deref(),
-                        mouse_state,
-                        PreviewViewAction::OpenWindow(window.source.clone()),
-                        appearance,
-                    ));
-                }
+                let cards = windows
+                    .iter()
+                    .take(MAX_WINDOWS)
+                    .zip(rows.by_ref())
+                    .map(|(window, mouse_state)| {
+                        let detail = match (window.on_screen, window.source.title.is_empty()) {
+                            (false, _) => Some("Minimized"),
+                            (true, true) => None,
+                            (true, false) => Some(window.source.title.as_str()),
+                        };
+                        window_card(
+                            self.thumbnails.get(&window.source.window_id).cloned(),
+                            &window.source.app_name,
+                            detail,
+                            mouse_state,
+                            PreviewViewAction::OpenWindow(window.source.clone()),
+                            appearance,
+                        )
+                    })
+                    .collect();
+                column.add_child(grid(cards, WINDOW_COLUMNS));
             }
         }
 
-        column.add_child(section_heading(Icon::AgentMode, "Agents", appearance));
-        column.add_child(muted_text(
-            "Agents in Warp terminals can list, open and look at previews with the preview_* \
-             tools. Edit scenes through the engine's own MCP server.",
-            appearance,
-        ));
-        column.add_child(link_button(
-            "Set up Claude Code tools",
-            &self.agent_setup_button,
-            PreviewViewAction::SetUpAgentTools,
-            appearance,
-        ));
-
-        Align::new(
+        column.add_child(
             Container::new(
-                ConstrainedBox::new(column.finish())
-                    .with_max_width(START_PAGE_WIDTH)
+                Flex::column()
+                    .with_spacing(4.)
+                    .with_child(muted_text(
+                        "Agents in Warp terminals can list, open and look at previews with the \
+                         preview_* tools. Edit scenes through the engine's own MCP server.",
+                        appearance,
+                    ))
+                    .with_child(link_button(
+                        "Set up Claude Code tools",
+                        &self.agent_setup_button,
+                        PreviewViewAction::SetUpAgentTools,
+                        appearance,
+                    ))
                     .finish(),
             )
-            .with_margin_top(32.)
-            .with_horizontal_padding(16.)
+            .with_margin_top(28.)
+            .with_uniform_padding(12.)
+            .with_background(theme.surface_1())
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
             .finish(),
+        );
+
+        ClippedScrollable::vertical(
+            self.start_page_scroll.clone(),
+            Align::new(
+                Container::new(
+                    ConstrainedBox::new(column.finish())
+                        .with_max_width(PAGE_WIDTH)
+                        .finish(),
+                )
+                .with_margin_top(40.)
+                .with_margin_bottom(32.)
+                .with_horizontal_padding(24.)
+                .finish(),
+            )
+            .top_center()
+            .finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
         )
-        .top_center()
         .finish()
     }
 
@@ -633,40 +718,14 @@ fn browser_name(path: &std::path::Path) -> String {
 }
 
 fn url_field(editor: &ViewHandle<EditorView>, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
     Container::new(ChildView::new(editor).finish())
-        .with_horizontal_padding(10.)
-        .with_vertical_padding(7.)
-        .with_background(appearance.theme().surface_2())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_horizontal_padding(14.)
+        .with_vertical_padding(12.)
+        .with_background(theme.surface_2())
+        .with_border(Border::all(1.).with_border_fill(theme.outline()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
         .finish()
-}
-
-fn section_heading(icon: Icon, heading: &str, appearance: &Appearance) -> Box<dyn Element> {
-    let color = appearance.theme().nonactive_ui_text_color();
-    Container::new(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.)
-            .with_child(
-                ConstrainedBox::new(icon.to_warpui_icon(color).finish())
-                    .with_width(ROW_ICON_SIZE)
-                    .with_height(ROW_ICON_SIZE)
-                    .finish(),
-            )
-            .with_child(
-                Text::new_inline(
-                    heading.to_owned(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(color.into())
-                .finish(),
-            )
-            .finish(),
-    )
-    .with_margin_top(18.)
-    .with_margin_bottom(4.)
-    .finish()
 }
 
 fn muted_text(text: &str, appearance: &Appearance) -> Box<dyn Element> {
@@ -680,66 +739,6 @@ fn muted_text(text: &str, appearance: &Appearance) -> Box<dyn Element> {
         .finish(),
     )
     .with_vertical_padding(4.)
-    .finish()
-}
-
-/// A clickable row on the start page.
-fn start_row(
-    icon: Icon,
-    title: &str,
-    detail: Option<&str>,
-    mouse_state: &MouseStateHandle,
-    action: PreviewViewAction,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme().clone();
-    let font_family = appearance.ui_font_family();
-    let font_size = appearance.ui_font_size();
-    let title = title.to_owned();
-    let detail = detail.map(str::to_owned);
-    Hoverable::new(mouse_state.clone(), move |state| {
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.)
-            .with_child(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(theme.nonactive_ui_text_color())
-                        .finish(),
-                )
-                .with_width(ROW_ICON_SIZE)
-                .with_height(ROW_ICON_SIZE)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(title.clone(), font_family, font_size)
-                        .with_color(theme.active_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        if let Some(detail) = &detail {
-            row.add_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(detail.clone(), font_family, font_size)
-                        .with_color(theme.nonactive_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        }
-        let mut container = Container::new(row.finish())
-            .with_horizontal_padding(10.)
-            .with_vertical_padding(6.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)));
-        if state.is_hovered() {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
     .finish()
 }
 

@@ -14,10 +14,10 @@ use warp_errors::report_error;
 use warpui::r#async::Timer;
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::elements::{
-    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    Shrinkable, Stack, Text,
+    Align, Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -27,6 +27,9 @@ use warpui::{
 };
 
 use super::geometry::webview_bounds;
+use super::start_page::{
+    PAGE_WIDTH, card_row, grid, page_heading, row_card, section_label, server_tile,
+};
 use super::{BrowserHistoryModel, BrowserViewRegistry};
 use crate::app_state::BrowserPaneSnapshot;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
@@ -64,7 +67,7 @@ const STATUS_ICON_SIZE: f32 = 16.;
 
 const CORNER_RADIUS: f32 = 6.;
 
-const NEW_TAB_PAGE_WIDTH: f32 = 560.;
+const SERVER_COLUMNS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserViewEvent {
@@ -153,6 +156,8 @@ pub struct BrowserView {
     auto_approve_button: MouseStateHandle,
     /// One per row the new-tab page can show, across its sections.
     recent_buttons: Vec<MouseStateHandle>,
+    new_tab_search_button: MouseStateHandle,
+    new_tab_scroll: ClippedScrollStateHandle,
     /// Servers found listening on this machine when a new-tab page was last shown.
     local_servers: Vec<LocalServer>,
     local_server_buttons: Vec<MouseStateHandle>,
@@ -252,6 +257,8 @@ impl BrowserView {
             recent_buttons: (0..MAX_RECENTS * 3)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
+            new_tab_search_button: MouseStateHandle::default(),
+            new_tab_scroll: Default::default(),
             local_servers: Vec::new(),
             local_server_buttons: (0..MAX_LOCAL_SERVERS)
                 .map(|_| MouseStateHandle::default())
@@ -959,82 +966,117 @@ impl BrowserView {
         let sections = BrowserHistoryModel::as_ref(app).sections(MAX_RECENTS);
         let mut mouse_states = self.recent_buttons.iter();
 
-        let mut column = Flex::column().with_spacing(2.);
+        let mut column = Flex::column();
+        column.add_child(Align::new(page_heading(Icon::Globe, "Where to?", appearance)).finish());
+        column.add_child(
+            Container::new(search_prompt(&self.new_tab_search_button, appearance))
+                .with_margin_top(18.)
+                .finish(),
+        );
+
+        if !self.local_servers.is_empty() {
+            column.add_child(section_label("Running on this machine", None, appearance));
+            let tiles = self
+                .local_servers
+                .iter()
+                .zip(&self.local_server_buttons)
+                .map(|(server, mouse_state)| {
+                    server_tile(
+                        Icon::Terminal,
+                        &warp_browser::display_url(&server.url()),
+                        &server.process,
+                        mouse_state,
+                        BrowserViewAction::OpenUrl(server.url()),
+                        appearance,
+                    )
+                })
+                .collect();
+            column.add_child(grid(tiles, SERVER_COLUMNS));
+        }
+
         let groups = [
-            (Icon::Laptop, "Local apps", &sections.local_apps),
             (
                 Icon::AgentMode,
                 "Opened by agents",
+                Some(theme.accent()),
                 &sections.opened_by_agents,
             ),
-            (Icon::Clock, "Recent", &sections.recent),
+            (Icon::Laptop, "Local apps", None, &sections.local_apps),
+            (Icon::Clock, "Recent", None, &sections.recent),
         ];
-        let mut is_empty = self.local_servers.is_empty();
-        if !is_empty {
-            column.add_child(
-                Container::new(section_heading(
-                    Icon::Terminal,
-                    "Running on this machine",
-                    appearance,
-                ))
-                .with_margin_top(14.)
-                .with_margin_bottom(4.)
-                .finish(),
-            );
-            for (server, mouse_state) in self.local_servers.iter().zip(&self.local_server_buttons) {
-                column.add_child(history_row(
-                    &server.url(),
-                    Some(&server.process),
-                    Icon::Terminal,
-                    mouse_state,
-                    appearance,
-                ));
-            }
-        }
-        for (icon, heading, entries) in groups {
+        let mut cards = Vec::new();
+        for (icon, heading, dot, entries) in groups {
             if entries.is_empty() {
                 continue;
             }
-            is_empty = false;
-            column.add_child(
-                Container::new(section_heading(icon, heading, appearance))
-                    .with_margin_top(14.)
-                    .with_margin_bottom(4.)
+            let rows = entries
+                .iter()
+                .zip(mouse_states.by_ref())
+                .map(|(entry, mouse_state)| {
+                    let short_url = warp_browser::display_url(&entry.url);
+                    let (title, detail) = match entry.title.as_deref() {
+                        Some(title) => (title.to_owned(), Some(short_url)),
+                        None => (short_url, None),
+                    };
+                    card_row(
+                        icon,
+                        &title,
+                        detail.as_deref(),
+                        mouse_state,
+                        BrowserViewAction::OpenUrl(entry.url.clone()),
+                        appearance,
+                    )
+                })
+                .collect();
+            cards.push(
+                Flex::column()
+                    .with_child(section_label(heading, dot, appearance))
+                    .with_child(row_card(rows, appearance))
                     .finish(),
             );
-            for (entry, mouse_state) in entries.iter().zip(mouse_states.by_ref()) {
-                column.add_child(history_row(
-                    &entry.url,
-                    entry.title.as_deref(),
-                    icon,
-                    mouse_state,
-                    appearance,
-                ));
-            }
         }
-        if is_empty {
+        if cards.is_empty() && self.local_servers.is_empty() {
             column.add_child(
-                Text::new_inline(
-                    "Pages you and your agents visit appear here. Type a URL or search above.",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
+                Container::new(
+                    Align::new(
+                        Text::new_inline(
+                            "Pages you and your agents visit appear here.",
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.nonactive_ui_text_color().into())
+                        .finish(),
+                    )
+                    .finish(),
                 )
-                .with_color(theme.nonactive_ui_text_color().into())
+                .with_margin_top(28.)
                 .finish(),
             );
+        } else if !cards.is_empty() {
+            // Two lists sit side by side; a third wraps below them.
+            column.add_child(grid(cards, 2));
         }
 
-        Align::new(
-            Container::new(
-                ConstrainedBox::new(column.finish())
-                    .with_max_width(NEW_TAB_PAGE_WIDTH)
-                    .finish(),
+        ClippedScrollable::vertical(
+            self.new_tab_scroll.clone(),
+            Align::new(
+                Container::new(
+                    ConstrainedBox::new(column.finish())
+                        .with_max_width(PAGE_WIDTH)
+                        .finish(),
+                )
+                .with_margin_top(56.)
+                .with_margin_bottom(32.)
+                .with_horizontal_padding(24.)
+                .finish(),
             )
-            .with_margin_top(32.)
-            .with_horizontal_padding(16.)
+            .top_center()
             .finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
         )
-        .top_center()
         .finish()
     }
 
@@ -1314,85 +1356,72 @@ impl BrowserView {
     }
 }
 
-fn section_heading(icon: Icon, heading: &str, appearance: &Appearance) -> Box<dyn Element> {
-    let color = appearance.theme().nonactive_ui_text_color();
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(6.)
-        .with_child(
-            ConstrainedBox::new(icon.to_warpui_icon(color).finish())
-                .with_width(TAB_ICON_SIZE)
-                .with_height(TAB_ICON_SIZE)
+/// A large stand-in for the address field on the new-tab page, which moves focus to the toolbar's
+/// field when clicked.
+fn search_prompt(mouse_state: &MouseStateHandle, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme().clone();
+    let ui_font = appearance.ui_font_family();
+    let mono_font = appearance.monospace_font_family();
+    let font_size = appearance.ui_font_size();
+    Hoverable::new(mouse_state.clone(), move |state| {
+        let border = if state.is_hovered() {
+            theme.accent()
+        } else {
+            theme.outline()
+        };
+        let shortcut = Container::new(
+            Text::new_inline(format!("{}L", cmd_or_ctrl_symbol()), mono_font, font_size)
+                .with_color(theme.nonactive_ui_text_color().into())
                 .finish(),
         )
-        .with_child(
-            Text::new_inline(
-                heading.to_owned(),
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(color.into())
-            .finish(),
+        .with_horizontal_padding(7.)
+        .with_vertical_padding(3.)
+        .with_background(theme.surface_3())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)))
+        .finish();
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(10.)
+                .with_child(
+                    ConstrainedBox::new(
+                        Icon::Search
+                            .to_warpui_icon(theme.nonactive_ui_text_color())
+                            .finish(),
+                    )
+                    .with_width(TAB_ICON_SIZE)
+                    .with_height(TAB_ICON_SIZE)
+                    .finish(),
+                )
+                .with_child(
+                    Expanded::new(
+                        1.,
+                        Text::new_inline(URL_FIELD_PLACEHOLDER, ui_font, font_size)
+                            .with_color(theme.nonactive_ui_text_color().into())
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(shortcut)
+                .finish(),
         )
+        .with_horizontal_padding(14.)
+        .with_vertical_padding(10.)
+        .with_background(theme.surface_2())
+        .with_border(Border::all(1.).with_border_fill(border))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
         .finish()
+    })
+    .on_click(|ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::FocusUrlField))
+    .finish()
 }
 
-/// A clickable page on the new-tab page.
-fn history_row(
-    url: &str,
-    title: Option<&str>,
-    icon: Icon,
-    mouse_state: &MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let font_family = appearance.ui_font_family();
-    let font_size = appearance.ui_font_size();
-    let short_url = warp_browser::display_url(url);
-    let title = title.map_or_else(|| short_url.clone(), str::to_owned);
-    let url = url.to_owned();
-    Hoverable::new(mouse_state.clone(), move |state| {
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.)
-            .with_child(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(theme.nonactive_ui_text_color())
-                        .finish(),
-                )
-                .with_width(TAB_ICON_SIZE)
-                .with_height(TAB_ICON_SIZE)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(title, font_family, font_size)
-                        .with_color(theme.active_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(short_url, font_family, font_size)
-                        .with_color(theme.nonactive_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        let mut container = Container::new(row.finish())
-            .with_horizontal_padding(10.)
-            .with_vertical_padding(6.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CORNER_RADIUS)));
-        if state.is_hovered() {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(BrowserViewAction::OpenUrl(url.clone())))
-    .finish()
+fn cmd_or_ctrl_symbol() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl+"
+    }
 }
 
 /// Whether a menu, modal or other overlay drew over `rect` in the last frame. The web view sits

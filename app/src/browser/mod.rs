@@ -7,6 +7,7 @@ mod history;
 #[cfg(not(target_family = "wasm"))]
 mod local_servers;
 mod registry;
+pub(crate) mod start_page;
 mod view;
 
 use warp_browser::EditCommand;
