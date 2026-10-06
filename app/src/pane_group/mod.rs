@@ -203,6 +203,7 @@ pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
 pub use pane::file_pane::FilePane;
 pub use pane::network_log_pane::NetworkLogPane;
 pub use pane::notebook_pane::NotebookPane;
+pub use pane::preview_pane::PreviewPane;
 pub use pane::settings_pane::SettingsPane;
 pub use pane::terminal_pane::TerminalPane;
 pub use pane::workflow_pane::WorkflowPane;
@@ -2008,6 +2009,9 @@ impl PaneGroup {
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
             }
+            LeafContents::Preview => Err(anyhow::anyhow!(
+                "Preview pane should not have been persisted, as it cannot be restored"
+            )),
             LeafContents::Browser(snapshot) => {
                 if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
                     return Err(anyhow::anyhow!("Browser panes are not enabled"));

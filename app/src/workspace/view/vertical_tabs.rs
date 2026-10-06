@@ -4472,6 +4472,7 @@ impl PaneGroup {
             | IPaneType::GetStarted
             | IPaneType::NetworkLog
             | IPaneType::Browser
+            | IPaneType::Preview
             | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]
             IPaneType::Dummy => TypedPane::Other,

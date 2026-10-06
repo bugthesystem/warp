@@ -2168,11 +2168,20 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 
     app.register_editable_bindings([EditableBinding::new(
+        "workspace:open_preview_pane",
+        "Open preview pane",
+        WorkspaceAction::OpenPreviewPane {
+            previews: Vec::new(),
+        },
+    )
+    .with_enabled(crate::preview::is_enabled)]);
+
+    app.register_editable_bindings([EditableBinding::new(
         "workspace:set_up_claude_code_browser_tools",
         "Set up browser tools for Claude Code",
         WorkspaceAction::SetUpClaudeCodeBrowserTools,
     )
-    .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
+    .with_enabled(crate::browser::agent_tools_enabled)]);
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:toggle_browser_agent_auto_approve",

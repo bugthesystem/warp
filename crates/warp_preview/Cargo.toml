@@ -1,0 +1,47 @@
+[package]
+name = "warp_preview"
+version = "0.1.0"
+edition = "2024"
+description = "Live previews of other programs for Warp's preview pane: capture, sources and agent tools"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+async-channel.workspace = true
+pathfinder_geometry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+command.workspace = true
+instant.workspace = true
+base64.workspace = true
+image.workspace = true
+log.workspace = true
+reqwest.workspace = true
+tungstenite = "0.24"
+url.workspace = true
+zip = { version = "2.1", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-graphics = { workspace = true, features = ["CGDataProvider", "CGImage", "CGWindow"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSEnumerator", "NSError", "NSString"] }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-core-graphics",
+    "libc",
+    "objc2-core-foundation",
+    "SCError",
+    "SCScreenshotManager",
+    "SCShareableContent",
+    "SCStream",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

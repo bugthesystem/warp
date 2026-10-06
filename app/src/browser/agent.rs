@@ -13,7 +13,6 @@ use warp_browser::claude_plugin;
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
 use warpui::r#async::Timer;
 
-use crate::features::FeatureFlag;
 use warpui::{
     Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle,
 };
@@ -54,7 +53,7 @@ pub fn mcp_url() -> String {
 /// Variables every Warp terminal gets, so Claude Code's warp-browser plugin reaches the browser
 /// tools without setup.
 pub fn terminal_env_vars() -> Vec<(OsString, OsString)> {
-    if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
+    if !super::agent_tools_enabled() {
         return Vec::new();
     }
     vec![
@@ -133,9 +132,9 @@ impl BrowserAgent {
         }
     }
 
-    /// The router serving the browser MCP endpoint.
-    pub fn router(&self) -> axum::Router {
-        agent::router(self.requests_tx.clone(), mcp_token())
+    /// Where the MCP endpoint sends browser tool calls.
+    pub fn requests(&self) -> async_channel::Sender<ToolRequest> {
+        self.requests_tx.clone()
     }
 
     /// How many notes no agent has read yet.

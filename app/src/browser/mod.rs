@@ -14,13 +14,41 @@ use warpui::actions::StandardAction;
 use warpui::keymap::FixedBinding;
 use warpui::{AppContext, View, id};
 
+use crate::features::FeatureFlag;
+
 use crate::util::bindings::CustomAction;
 
 #[cfg(not(target_family = "wasm"))]
 pub use agent::{BrowserAgent, mcp_token, mcp_url, terminal_env_vars, write_claude_code_plugin};
 pub use history::BrowserHistoryModel;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use local_servers::detect_local_servers;
 pub use registry::{BrowserViewRegistry, sync_webviews};
+pub(crate) use view::AgentApproval;
 pub use view::{BrowserView, BrowserViewAction, BrowserViewEvent};
+
+/// Whether browser panes, and the browser tools agents get, are available.
+pub fn is_enabled() -> bool {
+    FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported()
+}
+
+/// Whether the local MCP endpoint serves any tools: browser tools, preview tools, or both.
+pub fn agent_tools_enabled() -> bool {
+    is_enabled() || crate::preview::is_enabled()
+}
+
+/// The router serving the local MCP endpoint with the tools that are enabled.
+#[cfg(not(target_family = "wasm"))]
+pub fn mcp_router(ctx: &AppContext) -> axum::Router {
+    use warpui::SingletonEntity as _;
+
+    let channels = warp_browser::agent::ToolChannels {
+        browser: is_enabled().then(|| BrowserAgent::as_ref(ctx).requests()),
+        preview: crate::preview::is_enabled()
+            .then(|| crate::preview::PreviewAgent::as_ref(ctx).requests()),
+    };
+    warp_browser::agent::router(channels, mcp_token())
+}
 
 pub fn init(app: &mut AppContext) {
     let context = id!(BrowserView::ui_name());

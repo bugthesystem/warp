@@ -25,6 +25,7 @@ pub(super) mod get_started_view;
 pub(super) mod local_harness_launch;
 pub(super) mod network_log_pane;
 pub(super) mod notebook_pane;
+pub(super) mod preview_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
@@ -60,6 +61,7 @@ use crate::notebooks::file::FileNotebookView;
 use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
+use crate::preview::PreviewView;
 use crate::server::network_log_view::NetworkLogView;
 use crate::server::telemetry::SharingDialogSource;
 use crate::settings::PaneSettings;
@@ -149,6 +151,7 @@ pub(crate) enum IPaneType {
     GetStarted,
     NetworkLog,
     Browser,
+    Preview,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -174,6 +177,7 @@ impl Display for IPaneType {
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
             IPaneType::Browser => write!(f, "Browser"),
+            IPaneType::Preview => write!(f, "Preview"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -283,6 +287,11 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::Browser, ctx)
     }
 
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<PreviewView>>`].
+    pub fn from_preview_pane_ctx(ctx: &ViewContext<PaneView<PreviewView>>) -> Self {
+        Self::new_from_ctx(IPaneType::Preview, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
     pub fn from_terminal_pane_view(
         terminal_pane_view: &ViewHandle<terminal_pane::TerminalPaneView>,
@@ -390,6 +399,11 @@ impl PaneId {
     /// Creates a [`PaneId`] from a [`PaneView<BrowserView>`] entity ID.
     pub fn from_browser_pane_view(browser_pane_view: &ViewHandle<PaneView<BrowserView>>) -> Self {
         Self::new(IPaneType::Browser, browser_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<PreviewView>`] entity ID.
+    pub fn from_preview_pane_view(preview_pane_view: &ViewHandle<PaneView<PreviewView>>) -> Self {
+        Self::new(IPaneType::Preview, preview_pane_view)
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -513,6 +527,9 @@ impl PaneId {
             }
             IPaneType::Browser => {
                 ChildView::<PaneView<BrowserView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::Preview => {
+                ChildView::<PaneView<PreviewView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]

@@ -9582,6 +9582,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-screen-capture-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74b7c5390f477482f001bc354d6571a70db7e4f8d5288e860c45521fbce11394"
+dependencies = [
+ "block2 0.6.2",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-symbols"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15797,6 +15811,7 @@ dependencies = [
  "warp_managed_secrets",
  "warp_multi_agent_api",
  "warp_multi_agent_client",
+ "warp_preview",
  "warp_ripgrep",
  "warp_search_core",
  "warp_server_auth",
@@ -15905,6 +15920,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "warp_preview",
  "warpui",
  "wry",
 ]
@@ -16269,6 +16285,33 @@ dependencies = [
  "warp_core",
  "warp_multi_agent_api",
  "warp_server_client",
+]
+
+[[package]]
+name = "warp_preview"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "base64 0.22.1",
+ "block2 0.6.2",
+ "command",
+ "image",
+ "instant",
+ "log",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-screen-capture-kit",
+ "pathfinder_geometry",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tungstenite",
+ "url",
+ "zip 2.4.2",
 ]
 
 [[package]]

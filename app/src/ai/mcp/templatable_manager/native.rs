@@ -768,8 +768,7 @@ impl TemplatableMCPServerManager {
     /// Attaches the built-in browser MCP server, which Warp's local HTTP server hosts, so the
     /// agent can drive browser panes. Call once that server is listening.
     pub fn attach_browser_server(&mut self, ctx: &mut ModelContext<Self>) {
-        if FeatureFlag::BrowserPane.is_enabled()
-            && warp_browser::is_supported()
+        if crate::browser::agent_tools_enabled()
             && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
         {
             self.spawn_ephemeral_server(builtin::browser_mcp_installation(), ctx);
