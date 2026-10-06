@@ -578,12 +578,10 @@ fn record_step(id: PreviewId, step: String, ctx: &mut ModelContext<PreviewAgent>
     }
 }
 
-/// The preview pane in the active window, opening one if there is none.
+/// The preview pane in the window agents act in, opening one if there is none.
 fn preview_pane(ctx: &mut ModelContext<PreviewAgent>) -> Result<ViewHandle<PreviewView>, String> {
-    let window_id = ctx
-        .windows()
-        .active_window()
-        .ok_or_else(|| "No Warp window is open".to_owned())?;
+    let window_id =
+        crate::browser::agent_window(ctx).ok_or_else(|| "No Warp window is open".to_owned())?;
     let in_window = |ctx: &ModelContext<PreviewAgent>| {
         PreviewRegistry::as_ref(ctx)
             .views(ctx)
