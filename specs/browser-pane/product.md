@@ -46,7 +46,7 @@ Developers running a dev server or reading docs alongside a terminal session swi
 12. Clicking the page gives it keyboard focus. Text in the page can be selected by dragging, and right-clicking shows the page's context menu. Focusing any other pane takes keyboard focus back to Warp.
 13. While the page has focus, Warp's pane-navigation and window shortcuts still work.
 14. Cookies and logins persist across restarts.
-15. Agent tools only reach tabs in browser panes, and each action happens in a tab the user can see.
+15. Agent tools only reach tabs in open browser panes, and each action happens in a tab the user can see. A closed pane is never used, even while its close can still be undone: `browser_open` then opens a new pane, and a call waiting for approval in a pane that gets closed fails at once, telling the agent to open a new one.
 16. Agents act on local addresses (per 6.2) without asking. Before an agent opens, reads or operates a page on any other site, the pane shows a banner naming the site with "Allow once", "Always allow" and "Deny", and the agent waits for the answer. "Always allow" is remembered for that site across restarts; `www.` is ignored when matching sites. Warp's own agent additionally goes through its MCP permission settings.
 17. `⌘`-clicking a link to a local address (per 6.2) in terminal output opens it in a browser pane. Other links open in the default browser as before.
 18. Before an agent clicks or types, a labeled agent cursor glides to the element from where it last stopped on that site, the element is outlined, and a ripple shows the click, so the user can follow along. The user's own mouse pointer is never moved.
@@ -62,7 +62,7 @@ Developers running a dev server or reading docs alongside a terminal session swi
 28. The screenshot button copies an image of the active page to the clipboard, ready to paste into an agent such as Claude Code.
 29. "Screenshot copied" and "Note copied for your agent" confirmations show briefly in the toolbar.
 30. While an agent acts in a pane, and for four seconds after its last step, the pane shows an activity bar under the toolbar with the agent's current step (such as "Clicking element 4" or "Typing "hello" into element 2") and an accent border around the page.
-31. "Pause" in the activity bar holds every agent page action, in all panes, until "Resume"; the bar reads "Agent paused. You're in control." and the user can use the page meanwhile. Listing tabs and reading annotations are not held.
+31. "Pause" in the activity bar holds every agent page action, in all panes, until "Resume"; the bar reads "Agent paused. You're in control." and the user can use the page meanwhile. Listing tabs and reading annotations are not held, and nothing is held while no browser pane is open, since there would be no Resume button.
 32. "Stop" rejects every agent call that is paused or waiting for site approval, telling the agent not to use the browser again until the user asks, and resumes.
 
 ## Success criteria

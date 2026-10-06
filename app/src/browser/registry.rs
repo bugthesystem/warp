@@ -26,6 +26,7 @@ impl BrowserViewRegistry {
         self.views
             .iter()
             .filter_map(|view| view.upgrade(ctx))
+            .filter(|view| view.as_ref(ctx).is_attached())
             .flat_map(|view| {
                 view.as_ref(ctx)
                     .tab_ids()

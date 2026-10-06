@@ -117,6 +117,9 @@ pub struct BrowserView {
     new_tab_button: MouseStateHandle,
     /// Whether the active page, rather than Warp, has keyboard focus.
     page_focused: bool,
+    /// Whether the pane is in a pane group. A closed pane stays alive, detached, while its close
+    /// can still be undone, and agents must not use it then.
+    attached: bool,
     /// Whether the active page is in annotate mode, where clicking an element adds a note for
     /// agents instead of acting on it.
     annotating: bool,
@@ -218,6 +221,7 @@ impl BrowserView {
             reload_button: MouseStateHandle::default(),
             new_tab_button: MouseStateHandle::default(),
             page_focused: false,
+            attached: true,
             annotating: false,
             annotate_button: MouseStateHandle::default(),
             screenshot_button: MouseStateHandle::default(),
@@ -324,6 +328,28 @@ impl BrowserView {
     pub fn request_agent_approval(&mut self, site: String, ctx: &mut ViewContext<Self>) {
         self.agent_approval_site = Some(site);
         ctx.notify();
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.attached
+    }
+
+    /// Records whether the pane is in a pane group. Detaching ends annotate mode and rejects agent
+    /// calls waiting for approval here, since nobody can see the prompt.
+    pub fn set_attached(&mut self, attached: bool, ctx: &mut ViewContext<Self>) {
+        self.attached = attached;
+        if attached {
+            return;
+        }
+        self.set_annotating(false, ctx);
+        if self.agent_approval_site.take().is_some() {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let view_id = ctx.view_id();
+                super::BrowserAgent::handle(ctx)
+                    .update(ctx, |agent, ctx| agent.cancel_for_view(view_id, ctx));
+            }
+        }
     }
 
     /// Shows that an agent is taking `step` in this pane.

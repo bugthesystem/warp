@@ -391,4 +391,5 @@ integration_tests! {
 
     // Browser pane
     test_open_browser_pane_splits_and_focuses,
+    test_closed_browser_pane_is_not_offered_to_agents,
 }

@@ -9,7 +9,9 @@ use serde::Deserialize;
 use warp_browser::agent::{self, BrowserCommand, ToolOutput, ToolRequest};
 use warp_browser::annotation::{PageAnnotation, format_annotations};
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
-use warpui::{Entity, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle};
+use warpui::{
+    Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle,
+};
 
 use super::{AgentApproval, BrowserView, BrowserViewRegistry};
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
@@ -144,6 +146,22 @@ impl BrowserAgent {
         ctx.notify();
     }
 
+    /// Rejects the calls waiting for approval in a browser view that was closed.
+    pub fn cancel_for_view(&mut self, view_id: EntityId, ctx: &mut ModelContext<Self>) {
+        let (cancelled, pending) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition::<Vec<_>, _>(|pending| pending.view.id() == view_id);
+        self.pending = pending;
+        for pending in cancelled {
+            let _ = pending.reply.send(Err(
+                "The browser pane was closed before the user answered. Call browser_open to open \
+                 a new one."
+                    .to_owned(),
+            ));
+        }
+        ctx.notify();
+    }
+
     /// Whether agents may use any site without asking.
     pub fn auto_approve(&self) -> bool {
         self.approved_sites.auto_approve()
@@ -208,7 +226,11 @@ impl BrowserAgent {
     }
 
     fn handle_request(&mut self, request: ToolRequest, ctx: &mut ModelContext<Self>) {
-        if self.paused && request.command.step().is_some() {
+        // With no browser pane open there is no Resume button, so nothing is held.
+        if self.paused
+            && request.command.step().is_some()
+            && BrowserViewRegistry::as_ref(ctx).resolve(None, ctx).is_some()
+        {
             self.held.push(request);
             ctx.notify();
             return;

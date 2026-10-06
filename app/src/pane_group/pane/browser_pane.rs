@@ -63,6 +63,7 @@ impl PaneContent for BrowserPane {
             .update(ctx, |view, ctx| view.set_focus_handle(focus_handle, ctx));
 
         let browser_view = self.browser_view(ctx);
+        browser_view.update(ctx, |view, ctx| view.set_attached(true, ctx));
         let pane_id = self.id();
 
         ctx.subscribe_to_view(&browser_view, move |pane_group, _, event, ctx| {
@@ -77,10 +78,16 @@ impl PaneContent for BrowserPane {
     fn detach(
         &self,
         _group: &PaneGroup,
-        _detach_type: DetachType,
+        detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
         let browser_view = self.browser_view(ctx);
+        match detach_type {
+            DetachType::Closed | DetachType::HiddenForClose => {
+                browser_view.update(ctx, |view, ctx| view.set_attached(false, ctx));
+            }
+            DetachType::Moved => {}
+        }
         ctx.unsubscribe_to_view(&browser_view);
         ctx.unsubscribe_to_view(&self.view);
     }
