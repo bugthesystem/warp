@@ -1,7 +1,7 @@
 # bugthesystem/tap
 
 ```sh
-brew install --cask bugthesystem/tap/warped
+brew tap bugthesystem/tap && brew install --cask warped
 ```
 
 **Warped** is a temporary macOS build of [bugthesystem/warp](https://github.com/bugthesystem/warp), a fork of [Warp](https://github.com/warpdotdev/warp) with an embedded browser pane that agents (Warp's own and Claude Code) can drive. The same work is proposed upstream to Warp. Once Warp ships it, uninstall Warped and use Warp.
