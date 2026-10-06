@@ -667,9 +667,35 @@ fn evaluate_then(
     );
 }
 
-/// Glides the agent cursor to the element `element` and, once it arrives, calls `then` with the
-/// point it reached.
+/// Scrolls the element `element` into view, glides the agent cursor to it and, once it arrives,
+/// calls `then` with the point it reached.
 fn point_then(
+    tab: Option<u64>,
+    element: u64,
+    ctx: &mut ModelContext<BrowserAgent>,
+    then: impl FnOnce(Pointed, &mut ModelContext<BrowserAgent>) + 'static,
+) {
+    evaluate_then(
+        tab,
+        &agent::scroll_to_script(element),
+        ctx,
+        move |result, ctx| match result
+            .and_then(|(tab_id, _, json)| Ok((tab_id, agent::scroll_started(&json)?)))
+        {
+            Ok((tab_id, true)) => {
+                ctx.spawn(Timer::after(agent::SCROLL_DURATION), move |_, _, ctx| {
+                    glide_then(Some(tab_id), element, ctx, then)
+                });
+            }
+            Ok((tab_id, false)) => glide_then(Some(tab_id), element, ctx, then),
+            Err(message) => then(Err(message), ctx),
+        },
+    );
+}
+
+/// Glides the agent cursor to the element `element`, which is in view, and, once it arrives,
+/// calls `then` with the point it reached.
+fn glide_then(
     tab: Option<u64>,
     element: u64,
     ctx: &mut ModelContext<BrowserAgent>,

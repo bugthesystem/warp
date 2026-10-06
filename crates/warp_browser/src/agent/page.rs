@@ -108,9 +108,57 @@ const warpPress = point => {
 /// the agent's native click from moving Warp's focus to the page.
 const AGENT_INPUT_GUARD_MS: u128 = 1500;
 
-/// A script that scrolls the element `element` numbered by the last read into view, glides the
-/// agent cursor to it, and returns `{ok, x, y}`: the point reached, in logical pixels from the
-/// viewport's top-left corner, for a native click there once the cursor arrives.
+/// How long to let a smooth scroll to an element run before pointing at it.
+pub const SCROLL_DURATION: Duration = Duration::from_millis(500);
+
+/// A script that smoothly scrolls the element `element` numbered by the last read to the middle
+/// of the view when it is not fully visible, so the user can follow where the agent is going. It
+/// jumps instead when the user prefers reduced motion. Returns `{ok, scrolling}`, where
+/// `scrolling` says whether a smooth scroll started.
+pub fn scroll_to_script(element: u64) -> String {
+    format!(
+        r#"(() => {{
+  const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
+  if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
+  const rect = el.getBoundingClientRect();
+  if (rect.top >= 0 && rect.left >= 0 && rect.bottom <= innerHeight && rect.right <= innerWidth) {{
+    return {{ ok: true, scrolling: false }};
+  }}
+  const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({{ block: "center", inline: "nearest", behavior: smooth ? "smooth" : "auto" }});
+  return {{ ok: true, scrolling: smooth }};
+}})()"#
+    )
+}
+
+#[derive(Deserialize)]
+struct ScrollOutcome {
+    ok: bool,
+    error: Option<String>,
+    scrolling: Option<bool>,
+}
+
+/// Reads whether [`scroll_to_script`] started a smooth scroll. The error is a message for the
+/// agent.
+pub fn scroll_started(json: &str) -> Result<bool, String> {
+    let outcome: ScrollOutcome = serde_json::from_str(json)
+        .map_err(|err| format!("Unexpected result from the page: {err}"))?;
+    match outcome {
+        ScrollOutcome {
+            ok: true,
+            scrolling,
+            ..
+        } => Ok(scrolling.unwrap_or(false)),
+        ScrollOutcome { error, .. } => {
+            Err(error.unwrap_or_else(|| "The page did not report the element.".to_owned()))
+        }
+    }
+}
+
+/// A script that makes sure the element `element` numbered by the last read is in view, glides
+/// the agent cursor to it, and returns `{ok, x, y}`: the point reached, in logical pixels from the
+/// viewport's top-left corner, for a native click there once the cursor arrives. A smooth scroll
+/// still running is stopped where it is first, so the point stays valid.
 pub fn point_script(element: u64) -> String {
     let guard_ms = ACTION_DELAY.as_millis() + AGENT_INPUT_GUARD_MS;
     format!(
@@ -118,7 +166,8 @@ pub fn point_script(element: u64) -> String {
   {AGENT_CURSOR_SCRIPT}
   const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
   if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
-  el.scrollIntoView({{ block: "center" }});
+  window.scrollTo({{ left: scrollX, top: scrollY, behavior: "instant" }});
+  el.scrollIntoView({{ block: "nearest", inline: "nearest" }});
   const point = warpPointAt(el);
   window.__warpAgentInputUntil = Date.now() + {guard_ms};
   return {{ ok: true, x: point.x, y: point.y }};

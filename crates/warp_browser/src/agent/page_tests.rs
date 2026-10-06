@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::{
     PagePoint, format_console_messages, format_page_snapshot, page_point, point_script,
-    prepare_type_script, type_now_script,
+    prepare_type_script, scroll_started, scroll_to_script, type_now_script,
 };
 
 #[test]
@@ -167,5 +167,47 @@ fn reports_the_page_error_instead_of_a_point() {
     assert_eq!(
         point,
         Err("No element 9; call browser_read to refresh the element numbers.".to_owned())
+    );
+}
+
+#[test]
+fn scroll_script_scrolls_smoothly_unless_the_user_prefers_reduced_motion() {
+    let script = scroll_to_script(4);
+
+    assert!(
+        script.contains(r#"document.querySelector('[data-warp-agent-id="4"]')"#),
+        "{script}"
+    );
+    assert!(
+        script.contains("prefers-reduced-motion: reduce"),
+        "{script}"
+    );
+    assert!(
+        script.contains(r#"behavior: smooth ? "smooth" : "auto""#),
+        "{script}"
+    );
+}
+
+#[test]
+fn point_script_stops_a_running_scroll_before_measuring() {
+    let script = point_script(4);
+    let stop = script
+        .find(r#"behavior: "instant""#)
+        .expect("stops scrolling");
+    let measure = script.find("warpPointAt(el)").expect("measures");
+
+    assert!(stop < measure, "{script}");
+}
+
+#[test]
+fn reads_whether_a_smooth_scroll_started() {
+    assert_eq!(scroll_started(r#"{"ok":true,"scrolling":true}"#), Ok(true));
+    assert_eq!(
+        scroll_started(r#"{"ok":true,"scrolling":false}"#),
+        Ok(false)
+    );
+    assert_eq!(
+        scroll_started(r#"{"ok":false,"error":"No element 9."}"#),
+        Err("No element 9.".to_owned())
     );
 }

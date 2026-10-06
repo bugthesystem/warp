@@ -8,7 +8,7 @@ use warp_browser::annotation::format_annotations;
 use warp_browser::annotation::{PageAnnotation, SEND_NOTES_ACTION, annotate_script};
 use warp_browser::local_servers::LocalServer;
 use warp_browser::screenshot;
-use warp_browser::{WebView, WebViewEvent};
+use warp_browser::{EditCommand, WebView, WebViewEvent};
 use warp_core::ui::appearance::Appearance;
 use warp_errors::report_error;
 use warpui::r#async::Timer;
@@ -91,6 +91,7 @@ pub enum BrowserViewAction {
     SendNotes,
     SetAgentPaused(bool),
     StopAgent,
+    Edit(EditCommand),
 }
 
 /// The user's answer when an agent asks to use a site that is not local.
@@ -1730,6 +1731,11 @@ impl TypedActionView for BrowserView {
             BrowserViewAction::GoBack => self.navigate_active_tab(WebView::go_back),
             BrowserViewAction::GoForward => self.navigate_active_tab(WebView::go_forward),
             BrowserViewAction::Reload => self.navigate_active_tab(WebView::reload),
+            BrowserViewAction::Edit(command) => {
+                if let Some(placed) = &self.active().webview {
+                    placed.webview.perform_edit(*command);
+                }
+            }
         }
     }
 }

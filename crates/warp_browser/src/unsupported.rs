@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use pathfinder_geometry::rect::RectF;
 use warpui::{AppContext, WindowId};
 
-use crate::{Error, WebViewEvent};
+use crate::{EditCommand, Error, WebViewEvent};
 
 /// A native view of a Warp window that web views attach to. Never constructed on this platform.
 pub struct WebViewParent(Infallible);
@@ -79,6 +79,10 @@ impl WebView {
     }
 
     pub fn type_text(&self, _text: &str, _submit: bool) -> bool {
+        match self.0 {}
+    }
+
+    pub fn perform_edit(&self, _command: EditCommand) -> bool {
         match self.0 {}
     }
 

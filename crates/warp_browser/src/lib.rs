@@ -50,6 +50,17 @@ pub enum WebViewEvent {
     PageAction(String),
 }
 
+/// A standard editing command for the page's focused element or selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    Cut,
+    Copy,
+    Paste,
+    Undo,
+    Redo,
+    SelectAll,
+}
+
 /// Prefix of the message a button Warp put in the page posts, followed by the action's name.
 pub const PAGE_ACTION_PREFIX: &str = "warp:action:";
 

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
+use objc2::sel;
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage,
     NSView,
@@ -21,7 +22,7 @@ use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
 
 use crate::agent::CONSOLE_CAPTURE_SCRIPT;
 use crate::annotation::{ANNOTATE_EXITED_MESSAGE, ANNOTATION_MESSAGE_PREFIX};
-use crate::{Error, PAGE_ACTION_PREFIX, WebViewEvent};
+use crate::{EditCommand, Error, PAGE_ACTION_PREFIX, WebViewEvent};
 
 /// Message the focus script posts when the user clicks in the page.
 const PAGE_FOCUSED_MESSAGE: &str = "warp:page-focused";
@@ -263,6 +264,22 @@ impl WebView {
         }
         window.makeFirstResponder(previous_responder.as_deref());
         true
+    }
+
+    /// Runs `command` in the page, as the Edit menu does for native text views. Warp's own menu
+    /// handles these shortcuts, so they never reach the web view as key events. Returns whether
+    /// the web view, or a responder after it, handled the command.
+    pub fn perform_edit(&self, command: EditCommand) -> bool {
+        let action = match command {
+            EditCommand::Cut => sel!(cut:),
+            EditCommand::Copy => sel!(copy:),
+            EditCommand::Paste => sel!(paste:),
+            EditCommand::Undo => sel!(undo:),
+            EditCommand::Redo => sel!(redo:),
+            EditCommand::SelectAll => sel!(selectAll:),
+        };
+        // SAFETY: each selector is a standard NSResponder edit action taking an optional sender.
+        unsafe { self.webview.webview().tryToPerform_with(action, None) }
     }
 
     /// Gives the web view keyboard focus.
