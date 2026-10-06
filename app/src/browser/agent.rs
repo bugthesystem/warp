@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Deserialize;
-use warp_browser::agent::{self, BrowserCommand, ToolOutput, ToolRequest};
+use warp_browser::agent::{self, BrowserCommand, PagePoint, ToolOutput, ToolRequest};
 use warp_browser::annotation::{PageAnnotation, format_annotations};
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
+use warpui::r#async::Timer;
 use warpui::{
     Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle,
 };
@@ -83,6 +84,13 @@ const STOPPED_MESSAGE: &str = "The user stopped the agent in the browser pane. D
 browser again until they ask you to.";
 
 type Reply = tokio::sync::oneshot::Sender<ToolResult>;
+
+/// How long the page gets to react to a click or typing before the tool replies.
+const SETTLE_DELAY: Duration = Duration::from_millis(150);
+
+/// Ends an action's reply when it fell back to input from inside the page.
+const IN_PAGE_NOTE: &str =
+    " from inside the page, as native input was unavailable. Some pages ignore such input.";
 
 impl BrowserAgent {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -405,11 +413,26 @@ impl BrowserAgent {
                 })
             }
             BrowserCommand::Click { tab, element } => {
-                evaluate_in_tab(tab, &agent::click_script(element), ctx, move |result| {
-                    reply_after_action(
-                        action_result(result, || format!("Clicked element {element}.")),
-                        reply,
-                    )
+                point_then(tab, element, ctx, move |pointed, ctx| {
+                    let (tab_id, view, point) = match pointed {
+                        Ok(pointed) => pointed,
+                        Err(message) => return reply(Err(message)),
+                    };
+                    if native_click(tab_id, &view, point, ctx) {
+                        let done = format!("Clicked element {element}.");
+                        reply_after_settling(Ok(ToolOutput::Text(done)), reply, ctx);
+                        return;
+                    }
+                    evaluate_in_tab(
+                        Some(tab_id),
+                        &agent::click_now_script(element),
+                        ctx,
+                        move |result| {
+                            reply(action_result(result, || {
+                                format!("Clicked element {element}{IN_PAGE_NOTE}")
+                            }))
+                        },
+                    );
                 })
             }
             BrowserCommand::Type {
@@ -417,17 +440,45 @@ impl BrowserAgent {
                 element,
                 text,
                 submit,
-            } => evaluate_in_tab(
-                tab,
-                &agent::type_script(element, &text, submit),
-                ctx,
-                move |result| {
-                    reply_after_action(
-                        action_result(result, || format!("Typed into element {element}.")),
-                        reply,
-                    )
-                },
-            ),
+            } => point_then(tab, element, ctx, move |pointed, ctx| {
+                let (tab_id, view, point) = match pointed {
+                    Ok(pointed) => pointed,
+                    Err(message) => return reply(Err(message)),
+                };
+                // Clicking first focuses the field the way a person's click would.
+                native_click(tab_id, &view, point, ctx);
+                evaluate_then(
+                    Some(tab_id),
+                    &agent::prepare_type_script(element),
+                    ctx,
+                    move |prepared, ctx| {
+                        if let Err(message) =
+                            prepared.and_then(|(_, _, json)| action_result(Ok(json), String::new))
+                        {
+                            return reply(Err(message));
+                        }
+                        let typed = view.read(ctx, |view, _| {
+                            view.tab_webview(tab_id)
+                                .is_some_and(|webview| webview.type_text(&text, submit))
+                        });
+                        if typed {
+                            let done = format!("Typed into element {element}.");
+                            reply_after_settling(Ok(ToolOutput::Text(done)), reply, ctx);
+                            return;
+                        }
+                        evaluate_in_tab(
+                            Some(tab_id),
+                            &agent::type_now_script(element, &text, submit),
+                            ctx,
+                            move |result| {
+                                reply(action_result(result, || {
+                                    format!("Typed into element {element}{IN_PAGE_NOTE}")
+                                }))
+                            },
+                        );
+                    },
+                );
+            }),
         }
     }
 }
@@ -566,20 +617,92 @@ fn evaluate_in_tab(
 
 /// The page runs clicks and typing once the agent cursor reaches the element, so wait for that
 /// before replying; otherwise the agent could read the page before the action happened.
-fn reply_after_action(result: ToolResult, reply: impl FnOnce(ToolResult) + Send + 'static) {
-    if result.is_err() {
-        return reply(result);
-    }
-    std::thread::spawn(move || {
-        std::thread::sleep(agent::ACTION_DELAY + Duration::from_millis(150));
-        reply(result);
+/// Runs `script` in the page of `tab` and calls `then` on the main thread with the tab, its view
+/// and the script's result.
+fn evaluate_then(
+    tab: Option<u64>,
+    script: &str,
+    ctx: &mut ModelContext<BrowserAgent>,
+    then: impl FnOnce(Evaluated, &mut ModelContext<BrowserAgent>) + 'static,
+) {
+    let (tab_id, view) = match webview_tab(tab, ctx) {
+        Ok(tab) => tab,
+        Err(message) => return then(Err(message), ctx),
+    };
+    let (result_tx, result_rx) = futures::channel::oneshot::channel();
+    evaluate_in_tab(Some(tab_id), script, ctx, move |result| {
+        let _ = result_tx.send(result);
     });
+    ctx.spawn(
+        async move {
+            result_rx
+                .await
+                .unwrap_or_else(|_| Err("The page did not answer".to_owned()))
+        },
+        move |_, result, ctx| then(result.map(|json| (tab_id, view, json)), ctx),
+    );
+}
+
+/// Glides the agent cursor to the element `element` and, once it arrives, calls `then` with the
+/// point it reached.
+fn point_then(
+    tab: Option<u64>,
+    element: u64,
+    ctx: &mut ModelContext<BrowserAgent>,
+    then: impl FnOnce(Pointed, &mut ModelContext<BrowserAgent>) + 'static,
+) {
+    evaluate_then(
+        tab,
+        &agent::point_script(element),
+        ctx,
+        move |result, ctx| match result
+            .and_then(|(tab_id, view, json)| Ok((tab_id, view, agent::page_point(&json)?)))
+        {
+            Ok(pointed) => {
+                ctx.spawn(Timer::after(agent::ACTION_DELAY), move |_, _, ctx| {
+                    then(Ok(pointed), ctx)
+                });
+            }
+            Err(message) => then(Err(message), ctx),
+        },
+    );
+}
+
+/// Shows the agent cursor pressing at `point` and clicks there with native input. Returns whether
+/// the native click was sent.
+fn native_click(
+    tab_id: u64,
+    view: &ViewHandle<BrowserView>,
+    point: PagePoint,
+    ctx: &ModelContext<BrowserAgent>,
+) -> bool {
+    view.read(ctx, |view, _| {
+        view.tab_webview(tab_id).is_some_and(|webview| {
+            let _ = webview.evaluate(&agent::press_script(point.x, point.y), |_| {});
+            webview.click_at(point.x, point.y)
+        })
+    })
+}
+
+/// Replies once the page has had a moment to react to the action.
+fn reply_after_settling(
+    result: ToolResult,
+    reply: impl FnOnce(ToolResult) + 'static,
+    ctx: &mut ModelContext<BrowserAgent>,
+) {
+    ctx.spawn(Timer::after(SETTLE_DELAY), move |_, _, _| reply(result));
 }
 
 /// Takes a one-shot callback out of a slot shared between a success and a failure path.
 fn take<F>(slot: &Mutex<Option<F>>) -> Option<F> {
     slot.lock().ok()?.take()
 }
+
+/// A tab, its view, and the result of a script run in its page.
+type Evaluated = Result<(u64, ViewHandle<BrowserView>, String), String>;
+
+/// A tab, its view, and the point the agent cursor reached in its page.
+type Pointed = Result<(u64, ViewHandle<BrowserView>, PagePoint), String>;
 
 #[derive(Deserialize)]
 struct ActionOutcome {

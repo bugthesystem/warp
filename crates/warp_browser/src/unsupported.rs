@@ -74,6 +74,14 @@ impl WebView {
         match self.0 {}
     }
 
+    pub fn click_at(&self, _x: f32, _y: f32) -> bool {
+        match self.0 {}
+    }
+
+    pub fn type_text(&self, _text: &str, _submit: bool) -> bool {
+        match self.0 {}
+    }
+
     pub fn focus(&self) -> Result<(), Error> {
         match self.0 {}
     }

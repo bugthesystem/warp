@@ -41,7 +41,6 @@ pub fn read_page_script() -> String {
 }
 
 /// How long the agent cursor takes to reach an element before the click or typing happens.
-/// Tools wait this long, plus a margin, before reporting back.
 pub const ACTION_DELAY: Duration = Duration::from_millis(650);
 
 /// Defines `warpPointAt(el)`, which glides a visible agent cursor to an element, outlines it and
@@ -105,10 +104,15 @@ const warpPress = point => {
   setTimeout(() => ripple.remove(), 600);
 };"##;
 
-/// A script that moves the agent cursor to the element `element` numbered by the last read, then
-/// clicks it once the cursor arrives.
-pub fn click_script(element: u64) -> String {
-    let delay_ms = ACTION_DELAY.as_millis();
+/// How long after pointing at an element the page treats mouse input as the agent's, which keeps
+/// the agent's native click from moving Warp's focus to the page.
+const AGENT_INPUT_GUARD_MS: u128 = 1500;
+
+/// A script that scrolls the element `element` numbered by the last read into view, glides the
+/// agent cursor to it, and returns `{ok, x, y}`: the point reached, in logical pixels from the
+/// viewport's top-left corner, for a native click there once the cursor arrives.
+pub fn point_script(element: u64) -> String {
+    let guard_ms = ACTION_DELAY.as_millis() + AGENT_INPUT_GUARD_MS;
     format!(
         r#"(() => {{
   {AGENT_CURSOR_SCRIPT}
@@ -116,49 +120,111 @@ pub fn click_script(element: u64) -> String {
   if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
   el.scrollIntoView({{ block: "center" }});
   const point = warpPointAt(el);
-  setTimeout(() => {{
-    warpPress(point);
-    if (el.focus) el.focus();
-    el.click();
-  }}, {delay_ms});
+  window.__warpAgentInputUntil = Date.now() + {guard_ms};
+  return {{ ok: true, x: point.x, y: point.y }};
+}})()"#
+    )
+}
+
+/// A point in a page, in logical pixels from the viewport's top-left corner.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct PagePoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Deserialize)]
+struct PointOutcome {
+    ok: bool,
+    error: Option<String>,
+    x: Option<f32>,
+    y: Option<f32>,
+}
+
+/// Reads the point [`point_script`] returns. The error is a message for the agent.
+pub fn page_point(json: &str) -> Result<PagePoint, String> {
+    let outcome: PointOutcome = serde_json::from_str(json)
+        .map_err(|err| format!("Unexpected result from the page: {err}"))?;
+    match outcome {
+        PointOutcome {
+            ok: true,
+            x: Some(x),
+            y: Some(y),
+            ..
+        } => Ok(PagePoint { x, y }),
+        PointOutcome { error, .. } => {
+            Err(error.unwrap_or_else(|| "The page did not report where the element is.".to_owned()))
+        }
+    }
+}
+
+/// A script that shows the agent cursor pressing at `x`, `y`.
+pub fn press_script(x: f32, y: f32) -> String {
+    format!(
+        r#"(() => {{
+  {AGENT_CURSOR_SCRIPT}
+  warpPress({{ x: {x}, y: {y} }});
+}})()"#
+    )
+}
+
+/// A script that clicks the element `element` from inside the page, for when native input is not
+/// available. Some pages ignore such clicks.
+pub fn click_now_script(element: u64) -> String {
+    format!(
+        r#"(() => {{
+  const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
+  if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
+  if (el.focus) el.focus();
+  el.click();
   return {{ ok: true }};
 }})()"#
     )
 }
 
-/// A script that moves the agent cursor to the element `element` numbered by the last read, then
-/// replaces its value with `text` and optionally submits it.
-pub fn type_script(element: u64, text: &str, submit: bool) -> String {
-    let text = serde_json::to_string(text).expect("strings always serialize to JSON");
-    let delay_ms = ACTION_DELAY.as_millis();
+/// A script that focuses the element `element` and selects its contents, so native typing
+/// replaces them.
+pub fn prepare_type_script(element: u64) -> String {
+    let guard_ms = AGENT_INPUT_GUARD_MS;
     format!(
         r#"(() => {{
-  {AGENT_CURSOR_SCRIPT}
+  const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
+  if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
+  window.__warpAgentInputUntil = Date.now() + {guard_ms};
+  el.focus();
+  if (el.isContentEditable) document.execCommand("selectAll");
+  else if (el.select) el.select();
+  return {{ ok: true }};
+}})()"#
+    )
+}
+
+/// A script that replaces the value of the element `element` with `text` from inside the page,
+/// and optionally submits it, for when native input is not available.
+pub fn type_now_script(element: u64, text: &str, submit: bool) -> String {
+    let text = serde_json::to_string(text).expect("strings always serialize to JSON");
+    format!(
+        r#"(() => {{
   const el = document.querySelector('[{ELEMENT_ID_ATTRIBUTE}="{element}"]');
   if (!el) return {{ ok: false, error: "No element {element}; call browser_read to refresh the element numbers." }};
   const text = {text};
-  el.scrollIntoView({{ block: "center" }});
-  const point = warpPointAt(el);
-  setTimeout(() => {{
-    warpPress(point);
-    el.focus();
-    if (el.isContentEditable) {{
-      document.execCommand("selectAll");
-      document.execCommand("insertText", false, text);
-    }} else {{
-      // Frameworks such as React track the value through the prototype setter, so set it there.
-      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
-      el.dispatchEvent(new Event("input", {{ bubbles: true }}));
-      el.dispatchEvent(new Event("change", {{ bubbles: true }}));
-    }}
-    if ({submit}) {{
-      const enter = {{ key: "Enter", code: "Enter", keyCode: 13, bubbles: true }};
-      const proceed = el.dispatchEvent(new KeyboardEvent("keydown", enter));
-      el.dispatchEvent(new KeyboardEvent("keyup", enter));
-      if (proceed && el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
-    }}
-  }}, {delay_ms});
+  el.focus();
+  if (el.isContentEditable) {{
+    document.execCommand("selectAll");
+    document.execCommand("insertText", false, text);
+  }} else {{
+    // Frameworks such as React track the value through the prototype setter, so set it there.
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
+    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+    el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+  }}
+  if ({submit}) {{
+    const enter = {{ key: "Enter", code: "Enter", keyCode: 13, bubbles: true }};
+    const proceed = el.dispatchEvent(new KeyboardEvent("keydown", enter));
+    el.dispatchEvent(new KeyboardEvent("keyup", enter));
+    if (proceed && el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+  }}
   return {{ ok: true }};
 }})()"#
     )

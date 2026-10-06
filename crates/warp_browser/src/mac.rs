@@ -5,8 +5,11 @@ use std::sync::Mutex;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSView};
-use objc2_foundation::{NSDictionary, NSError};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage,
+    NSView,
+};
+use objc2_foundation::{NSDictionary, NSError, NSPoint, NSProcessInfo, NSString};
 use pathfinder_geometry::rect::RectF;
 use warpui::platform::mac::WindowExt;
 use warpui::{AppContext, WindowId};
@@ -24,8 +27,12 @@ use crate::{Error, PAGE_ACTION_PREFIX, WebViewEvent};
 const PAGE_FOCUSED_MESSAGE: &str = "warp:page-focused";
 
 /// Reports clicks in the page so Warp can move its own focus to the pane. The capture phase sees
-/// the click even when the page stops it from propagating.
-const FOCUS_SCRIPT: &str = r#"document.addEventListener("mousedown", () => window.ipc.postMessage("warp:page-focused"), true);"#;
+/// the click even when the page stops it from propagating. Clicks an agent makes are skipped, so
+/// they do not pull focus from the user's terminal.
+const FOCUS_SCRIPT: &str = r#"document.addEventListener("mousedown", () => { if ((window.__warpAgentInputUntil || 0) > Date.now()) return; window.ipc.postMessage("warp:page-focused"); }, true);"#;
+
+/// The virtual key code of Return.
+const RETURN_KEY_CODE: u16 = 36;
 
 /// A native view of a Warp window that web views attach to.
 pub struct WebViewParent {
@@ -170,6 +177,92 @@ impl WebView {
                 .webview()
                 .takeSnapshotWithConfiguration_completionHandler(None, &handler);
         }
+    }
+
+    /// Clicks at `x`, `y` (logical pixels from the web view's top-left corner) with native mouse
+    /// events, which pages cannot tell from the user's own. The user's pointer does not move.
+    /// Returns whether the events were sent, which needs the web view to be in a window.
+    pub fn click_at(&self, x: f32, y: f32) -> bool {
+        let view = self.webview.webview();
+        let Some(window) = view.window() else {
+            return false;
+        };
+        let y = if view.isFlipped() {
+            y
+        } else {
+            view.bounds().size.height as f32 - y
+        };
+        let location = view.convertPoint_toView(NSPoint::new(x.into(), y.into()), None);
+        let mouse_event = |event_type| {
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                event_type,
+                location,
+                NSEventModifierFlags::empty(),
+                NSProcessInfo::processInfo().systemUptime(),
+                window.windowNumber(),
+                None,
+                0,
+                1,
+                1.,
+            )
+        };
+        let (Some(moved), Some(down), Some(up)) = (
+            mouse_event(NSEventType::MouseMoved),
+            mouse_event(NSEventType::LeftMouseDown),
+            mouse_event(NSEventType::LeftMouseUp),
+        ) else {
+            return false;
+        };
+        view.mouseMoved(&moved);
+        view.mouseDown(&down);
+        view.mouseUp(&up);
+        true
+    }
+
+    /// Types `text`, then presses Return when `submit`, with native key events into the page's
+    /// focused element. Keyboard focus moves to the page while typing and then goes back. Returns
+    /// whether the events were sent, which needs the web view to be in the key window.
+    pub fn type_text(&self, text: &str, submit: bool) -> bool {
+        let view = self.webview.webview();
+        let Some(window) = view.window().filter(|window| window.isKeyWindow()) else {
+            return false;
+        };
+        let key_event = |event_type, characters: &NSString, key_code| {
+            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                event_type,
+                NSPoint::ZERO,
+                NSEventModifierFlags::empty(),
+                NSProcessInfo::processInfo().systemUptime(),
+                window.windowNumber(),
+                None,
+                characters,
+                characters,
+                false,
+                key_code,
+            )
+        };
+        let press = |characters: &str, key_code| {
+            let characters = NSString::from_str(characters);
+            if let (Some(down), Some(up)) = (
+                key_event(NSEventType::KeyDown, &characters, key_code),
+                key_event(NSEventType::KeyUp, &characters, key_code),
+            ) {
+                view.keyDown(&down);
+                view.keyUp(&up);
+            }
+        };
+
+        let previous_responder = window.firstResponder();
+        window.makeFirstResponder(Some(&view));
+        let mut buffer = [0; 4];
+        for character in text.chars() {
+            press(character.encode_utf8(&mut buffer), 0);
+        }
+        if submit {
+            press("\r", RETURN_KEY_CODE);
+        }
+        window.makeFirstResponder(previous_responder.as_deref());
+        true
     }
 
     /// Gives the web view keyboard focus.

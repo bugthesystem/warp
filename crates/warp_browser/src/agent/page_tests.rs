@@ -1,6 +1,9 @@
 use serde_json::json;
 
-use super::{click_script, format_console_messages, format_page_snapshot, type_script};
+use super::{
+    PagePoint, format_console_messages, format_page_snapshot, page_point, point_script,
+    prepare_type_script, type_now_script,
+};
 
 #[test]
 fn formats_elements_with_numbers_and_links() {
@@ -76,8 +79,8 @@ fn rejects_unexpected_json() {
 }
 
 #[test]
-fn type_script_embeds_text_as_a_json_string_literal() {
-    let script = type_script(3, "it's \"quoted\"\n</script>", false);
+fn type_now_script_embeds_text_as_a_json_string_literal() {
+    let script = type_now_script(3, "it's \"quoted\"\n</script>", false);
 
     assert!(
         script.contains(r#"const text = "it's \"quoted\"\n</script>";"#),
@@ -86,14 +89,33 @@ fn type_script_embeds_text_as_a_json_string_literal() {
 }
 
 #[test]
-fn click_script_moves_the_agent_cursor_before_clicking() {
-    let script = click_script(4);
+fn point_script_glides_the_cursor_and_marks_agent_input_without_clicking() {
+    let script = point_script(4);
 
-    let cursor = script.find("warpPointAt(el);").unwrap();
-    let press = script.find("warpPress(point);").unwrap();
-    let click = script.find("el.click();").unwrap();
-    assert!(cursor < press && press < click, "{script}");
-    assert!(script.contains("}, 650);"), "{script}");
+    assert!(
+        script.contains("const point = warpPointAt(el);"),
+        "{script}"
+    );
+    assert!(
+        script.contains("window.__warpAgentInputUntil = Date.now() + 2150;"),
+        "{script}"
+    );
+    assert!(
+        script.contains("return { ok: true, x: point.x, y: point.y };"),
+        "{script}"
+    );
+    assert!(!script.contains(".click()"), "{script}");
+}
+
+#[test]
+fn prepare_type_script_selects_the_value_to_replace() {
+    let script = prepare_type_script(2);
+
+    assert!(script.contains("el.focus();"), "{script}");
+    assert!(
+        script.contains("else if (el.select) el.select();"),
+        "{script}"
+    );
 }
 
 #[test]
@@ -127,4 +149,23 @@ fn reports_when_console_capture_is_missing() {
     let output = format_console_messages("null").unwrap();
 
     assert_eq!(output, "Console capture is not available on this page.");
+}
+
+#[test]
+fn reads_the_point_the_cursor_reached() {
+    let point = page_point(r#"{"ok":true,"x":120.5,"y":48}"#);
+
+    assert_eq!(point, Ok(PagePoint { x: 120.5, y: 48. }));
+}
+
+#[test]
+fn reports_the_page_error_instead_of_a_point() {
+    let point = page_point(
+        r#"{"ok":false,"error":"No element 9; call browser_read to refresh the element numbers."}"#,
+    );
+
+    assert_eq!(
+        point,
+        Err("No element 9; call browser_read to refresh the element numbers.".to_owned())
+    );
 }

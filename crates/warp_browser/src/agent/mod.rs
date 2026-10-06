@@ -11,8 +11,9 @@ mod token;
 
 pub use command::{BrowserCommand, ToolOutput, ToolRequest};
 pub use page::{
-    ACTION_DELAY, CONSOLE_CAPTURE_SCRIPT, click_script, console_script, format_console_messages,
-    format_page_snapshot, read_page_script, type_script,
+    ACTION_DELAY, CONSOLE_CAPTURE_SCRIPT, PagePoint, click_now_script, console_script,
+    format_console_messages, format_page_snapshot, page_point, point_script, prepare_type_script,
+    press_script, read_page_script, type_now_script,
 };
 pub use server::{MCP_PATH, router};
 pub use token::{load_or_create_token, new_token};

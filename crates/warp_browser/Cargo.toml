@@ -28,11 +28,22 @@ block2 = "0.6"
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "NSBitmapImageRep",
+    "NSEvent",
+    "NSGraphicsContext",
     "NSImage",
     "NSImageRep",
+    "NSResponder",
     "NSView",
+    "NSWindow",
 ] }
-objc2-foundation = { workspace = true, features = ["NSData", "NSDictionary", "NSError"] }
+objc2-foundation = { workspace = true, features = [
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSProcessInfo",
+    "NSString",
+] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = [
     "block2",
     "objc2-app-kit",
