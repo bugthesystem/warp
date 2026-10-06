@@ -1,11 +1,15 @@
+// Streams run on their own native threads, which block on channels by design.
+#![allow(clippy::disallowed_methods)]
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use base64::Engine;
+use command::blocking::Command;
 use serde_json::{Value, json};
 
 use super::cdp::{Cdp, Message, devtools_url};
@@ -37,7 +41,15 @@ pub(crate) fn start_screencast(
         .name("preview-browser".to_owned())
         .spawn(move || {
             let profile = profile_dir();
-            let result = run(&chromium, &profile, &url, viewport, rate, &control_rx, &events);
+            let result = run(
+                &chromium,
+                &profile,
+                &url,
+                viewport,
+                rate,
+                &control_rx,
+                &events,
+            );
             let _ = std::fs::remove_dir_all(&profile);
             if let Err(message) = result {
                 let _ = events.send_blocking(StreamEvent::Ended(message));
@@ -67,7 +79,11 @@ impl Drop for Browser {
     }
 }
 
-fn launch(chromium: &Path, profile: &Path, viewport: (u32, u32)) -> Result<(Browser, String), String> {
+fn launch(
+    chromium: &Path,
+    profile: &Path,
+    viewport: (u32, u32),
+) -> Result<(Browser, String), String> {
     let mut command = Command::new(chromium);
     command
         .arg("--headless")
@@ -255,7 +271,11 @@ fn run(
     }
 }
 
-fn set_viewport(cdp: &mut Cdp, (width, height): (u32, u32), session: Option<&str>) -> Result<(), String> {
+fn set_viewport(
+    cdp: &mut Cdp,
+    (width, height): (u32, u32),
+    session: Option<&str>,
+) -> Result<(), String> {
     cdp.call(
         "Emulation.setDeviceMetricsOverride",
         json!({
@@ -311,7 +331,10 @@ pub(crate) fn log_line(method: &str, params: &Value) -> Option<String> {
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            format!("console.{}: {text}", params["type"].as_str().unwrap_or("log"))
+            format!(
+                "console.{}: {text}",
+                params["type"].as_str().unwrap_or("log")
+            )
         }
         "Runtime.exceptionThrown" => {
             let details = &params["exceptionDetails"];

@@ -98,9 +98,9 @@ impl PreviewAgent {
             .partition::<Vec<_>, _>(|pending| pending.holder.view_id() == view_id);
         self.pending = pending;
         for pending in cancelled {
-            let _ = pending
-                .reply
-                .try_send(Err("The preview closed before the user answered.".to_owned()));
+            let _ = pending.reply.try_send(Err(
+                "The preview closed before the user answered.".to_owned()
+            ));
         }
         ctx.notify();
     }
@@ -350,11 +350,24 @@ impl PreviewAgent {
     }
 
     /// The picture, and for `preview_look` the recent log, of preview `id`.
-    fn look(&self, command: &PreviewCommand, id: PreviewId, ctx: &mut ModelContext<Self>) -> ToolResult {
+    fn look(
+        &self,
+        command: &PreviewCommand,
+        id: PreviewId,
+        ctx: &mut ModelContext<Self>,
+    ) -> ToolResult {
         PreviewStreams::handle(ctx).update(ctx, |streams, _| streams.mark_used(id));
         let streams = PreviewStreams::as_ref(ctx);
-        let preview = streams.get(id).ok_or_else(|| format!("Preview {id} closed"))?;
-        let full_size = matches!(command, PreviewCommand::Screenshot { full_size: true, .. });
+        let preview = streams
+            .get(id)
+            .ok_or_else(|| format!("Preview {id} closed"))?;
+        let full_size = matches!(
+            command,
+            PreviewCommand::Screenshot {
+                full_size: true,
+                ..
+            }
+        );
         let jpeg = preview.latest_jpeg().and_then(|jpeg| {
             if full_size {
                 Some(jpeg.to_vec())
@@ -429,7 +442,9 @@ fn status_note(status: &PreviewStatus) -> Option<String> {
     match status {
         PreviewStatus::Live => None,
         PreviewStatus::Starting => Some("starting".to_owned()),
-        PreviewStatus::Minimized => Some("the window is minimized, so the picture is old".to_owned()),
+        PreviewStatus::Minimized => {
+            Some("the window is minimized, so the picture is old".to_owned())
+        }
         PreviewStatus::NeedsChromium => {
             Some("waiting for the user to download Chromium on the preview's start page".to_owned())
         }
@@ -600,7 +615,9 @@ fn format_targets(
         Err(warp_preview::Error::Unsupported) => {}
         Err(err) => text.push_str(&format!("\nApp windows are unavailable: {err}.\n")),
     }
-    text.push_str("\nAny URL, such as a local dev server, can be opened with preview_open url=<url>.");
+    text.push_str(
+        "\nAny URL, such as a local dev server, can be opened with preview_open url=<url>.",
+    );
     text
 }
 

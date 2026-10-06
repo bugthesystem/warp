@@ -4,13 +4,13 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{
-    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    Image, Stack, Text,
-};
 use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Stack, Text,
+};
 use warpui::image_cache::CacheOption;
 use warpui::ui_components::components::UiComponent;
 use warpui::{Action, AppContext, Element, SingletonEntity};
@@ -199,7 +199,14 @@ pub fn render_stage<A: Action + Clone>(
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(Expanded::new(1., picture.finish()).finish());
     if options.show_cards && cards.len() > 1 {
-        row.add_child(render_cards(cards, front, streams, mouse_states, wrap, appearance));
+        row.add_child(render_cards(
+            cards,
+            front,
+            streams,
+            mouse_states,
+            wrap,
+            appearance,
+        ));
     }
     Container::new(row.finish())
         .with_background(STAGE_BACKGROUND)
@@ -238,7 +245,9 @@ fn frame_image_from(asset: AssetSource, opacity: f32) -> Box<dyn Element> {
     Image::new(asset, CacheOption::BySize)
         .contain()
         .with_opacity(opacity)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PICTURE_CORNER_RADIUS)))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+            PICTURE_CORNER_RADIUS,
+        )))
         .finish()
 }
 

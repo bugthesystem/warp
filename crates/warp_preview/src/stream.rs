@@ -68,7 +68,13 @@ pub fn start(
     match source {
         Source::Browser { url } => {
             let chromium = environment.chromium.clone().ok_or(Error::NoChromium)?;
-            crate::browser::start_screencast(chromium, url.clone(), environment.viewport, rate, events)
+            crate::browser::start_screencast(
+                chromium,
+                url.clone(),
+                environment.viewport,
+                rate,
+                events,
+            )
         }
         Source::Window(window_source) => {
             crate::window::start_capture(window_source.clone(), rate, events)

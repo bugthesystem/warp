@@ -1,18 +1,16 @@
 use std::time::Duration;
 
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_preview::Rate;
-use warpui::prelude::DropShadow;
 use warpui::r#async::Timer;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Draggable, DraggableState,
     OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius,
 };
-use pathfinder_color::ColorU;
-use warpui::{
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::prelude::DropShadow;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::stage::{StageAction, StageMouseStates, StageOptions, render_stage};
 use super::streams::{PreviewId, PreviewStreams};
@@ -312,7 +310,10 @@ impl View for PreviewPipView {
                 position_id: &self.position_id,
                 in_picture_in_picture: true,
                 show_cards: false,
-                approval: self.approval.as_ref().map(|approval| approval.name.as_str()),
+                approval: self
+                    .approval
+                    .as_ref()
+                    .map(|approval| approval.name.as_str()),
                 agent_step: self.agent_step.as_deref(),
                 notice: self.notice,
             },
@@ -322,7 +323,9 @@ impl View for PreviewPipView {
         let window = ConstrainedBox::new(
             Container::new(stage)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
-                .with_drop_shadow(DropShadow::new_with_standard_offset_and_spread(ColorU::new(0, 0, 0, 110)))
+                .with_drop_shadow(DropShadow::new_with_standard_offset_and_spread(
+                    ColorU::new(0, 0, 0, 110),
+                ))
                 .finish(),
         )
         .with_width(PIP_WIDTH)

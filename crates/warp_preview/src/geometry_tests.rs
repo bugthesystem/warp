@@ -27,7 +27,10 @@ fn letterbox_keeps_area_for_empty_content() {
 fn to_source_maps_through_the_letterbox() {
     let area = RectF::new(vec2f(10., 20.), vec2f(400., 200.));
     let content = vec2f(1000., 1000.);
-    assert_eq!(to_source(vec2f(110., 20.), content, area), Some(vec2f(0., 0.)));
+    assert_eq!(
+        to_source(vec2f(110., 20.), content, area),
+        Some(vec2f(0., 0.))
+    );
     assert_eq!(
         to_source(vec2f(210., 120.), content, area),
         Some(vec2f(500., 500.))

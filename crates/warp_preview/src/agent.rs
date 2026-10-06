@@ -22,8 +22,14 @@ engine's own MCP server or the shell, then look again.";
 pub enum PreviewCommand {
     Targets,
     Open(OpenTarget),
-    Screenshot { preview: Option<u64>, full_size: bool },
-    Look { preview: Option<u64>, lines: usize },
+    Screenshot {
+        preview: Option<u64>,
+        full_size: bool,
+    },
+    Look {
+        preview: Option<u64>,
+        lines: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +63,9 @@ impl PreviewCommand {
             Self::Targets => None,
             Self::Open(OpenTarget::Url(url)) => Some(format!("Opening {url} in a preview")),
             Self::Open(OpenTarget::Window(_)) => Some("Opening a window in a preview".to_owned()),
-            Self::Screenshot { .. } | Self::Look { .. } => Some("Looking at the preview".to_owned()),
+            Self::Screenshot { .. } | Self::Look { .. } => {
+                Some("Looking at the preview".to_owned())
+            }
         }
     }
 

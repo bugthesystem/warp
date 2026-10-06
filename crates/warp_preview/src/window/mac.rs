@@ -1,8 +1,13 @@
 //! Window capture through ScreenCaptureKit. Each frame is a screenshot of one window taken with
 //! `SCScreenshotManager`, which works while the window is covered and never activates its app.
 
+// Captures run on their own native threads, which block on channels by design.
+#![allow(clippy::disallowed_methods)]
+
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -53,12 +58,14 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, Error> {
         return Err(Error::ScreenRecordingDenied);
     }
     let (tx, rx) = mpsc::channel();
-    let handler = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
-        // SAFETY: ScreenCaptureKit passes a valid object or null.
-        let content = unsafe { Retained::retain(content) };
-        let failed = !error.is_null();
-        let _ = tx.send(Delivered((content, failed)));
-    });
+    let handler = RcBlock::new(
+        move |content: *mut SCShareableContent, error: *mut NSError| {
+            // SAFETY: ScreenCaptureKit passes a valid object or null.
+            let content = unsafe { Retained::retain(content) };
+            let failed = !error.is_null();
+            let _ = tx.send(Delivered((content, failed)));
+        },
+    );
     // SAFETY: the handler matches the documented signature and outlives the call, which copies it.
     unsafe {
         SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
@@ -89,7 +96,10 @@ fn entry(window: &SCWindow) -> Option<WindowEntry> {
                     bundle_id
                 },
                 app_name,
-                title: window.title().map(|title| title.to_string()).unwrap_or_default(),
+                title: window
+                    .title()
+                    .map(|title| title.to_string())
+                    .unwrap_or_default(),
             },
             width: frame.size.width.max(0.) as u32,
             height: frame.size.height.max(0.) as u32,

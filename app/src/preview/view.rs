@@ -287,7 +287,10 @@ impl PreviewView {
     }
 
     fn sync_title(&mut self, ctx: &mut ViewContext<Self>) {
-        let title = match self.front.and_then(|id| PreviewStreams::as_ref(ctx).get(id)) {
+        let title = match self
+            .front
+            .and_then(|id| PreviewStreams::as_ref(ctx).get(id))
+        {
             Some(preview) if !self.show_start_page => preview.label(),
             _ => DEFAULT_TITLE.to_owned(),
         };
@@ -579,7 +582,11 @@ impl PreviewView {
     }
 
     /// Which browser page previews use, or how to get one.
-    fn render_chromium_status(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_chromium_status(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         match PreviewStreams::as_ref(app).chromium() {
             ChromiumState::Looking => muted_text("Looking for a browser…", appearance),
             ChromiumState::Found(path) => muted_text(
@@ -811,7 +818,10 @@ impl View for PreviewView {
                 position_id: &self.position_id,
                 in_picture_in_picture: false,
                 show_cards: true,
-                approval: self.approval.as_ref().map(|approval| approval.name.as_str()),
+                approval: self
+                    .approval
+                    .as_ref()
+                    .map(|approval| approval.name.as_str()),
                 agent_step: self.agent_step.as_deref(),
                 notice: self.notice,
             },

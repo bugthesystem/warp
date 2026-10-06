@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use serde_json::json;
 

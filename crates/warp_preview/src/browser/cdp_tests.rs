@@ -23,7 +23,9 @@ fn reads_responses_and_errors() {
 #[test]
 fn reads_events_with_their_session() {
     assert_eq!(
-        parse_message(r#"{"method": "Page.screencastFrame", "params": {"sessionId": 1}, "sessionId": "S"}"#),
+        parse_message(
+            r#"{"method": "Page.screencastFrame", "params": {"sessionId": 1}, "sessionId": "S"}"#
+        ),
         Some(Message::Event {
             method: "Page.screencastFrame".to_owned(),
             params: json!({"sessionId": 1}),
@@ -36,16 +38,21 @@ fn reads_events_with_their_session() {
 
 #[test]
 fn writes_commands_with_an_optional_session() {
-    let without: serde_json::Value =
-        serde_json::from_str(&command_message(1, "Target.createTarget", json!({"url": "about:blank"}), None))
-            .expect("json");
+    let without: serde_json::Value = serde_json::from_str(&command_message(
+        1,
+        "Target.createTarget",
+        json!({"url": "about:blank"}),
+        None,
+    ))
+    .expect("json");
     assert_eq!(
         without,
         json!({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}})
     );
 
     let with: serde_json::Value =
-        serde_json::from_str(&command_message(2, "Page.enable", json!({}), Some("S"))).expect("json");
+        serde_json::from_str(&command_message(2, "Page.enable", json!({}), Some("S")))
+            .expect("json");
     assert_eq!(with["sessionId"], json!("S"));
 }
 

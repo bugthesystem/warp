@@ -9,8 +9,13 @@ fn args(value: Value) -> Map<String, Value> {
 #[test]
 fn parses_open_by_url_or_window() {
     assert_eq!(
-        PreviewCommand::from_tool_call("preview_open", &args(json!({"url": "http://localhost:5173"}))),
-        Ok(PreviewCommand::Open(OpenTarget::Url("http://localhost:5173".to_owned())))
+        PreviewCommand::from_tool_call(
+            "preview_open",
+            &args(json!({"url": "http://localhost:5173"}))
+        ),
+        Ok(PreviewCommand::Open(OpenTarget::Url(
+            "http://localhost:5173".to_owned()
+        )))
     );
     assert_eq!(
         PreviewCommand::from_tool_call("preview_open", &args(json!({"window": 812}))),
@@ -73,6 +78,9 @@ fn every_defined_tool_parses() {
         } else {
             Map::new()
         };
-        assert!(PreviewCommand::from_tool_call(name, &call).is_ok(), "{name}");
+        assert!(
+            PreviewCommand::from_tool_call(name, &call).is_ok(),
+            "{name}"
+        );
     }
 }

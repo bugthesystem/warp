@@ -52,11 +52,14 @@ impl PaneContent for PreviewPane {
         preview_view.update(ctx, |view, ctx| view.set_attached(true, ctx));
         let pane_id = self.id();
 
-        ctx.subscribe_to_view(&preview_view, move |pane_group, _, event, ctx| match event {
-            PreviewViewEvent::Pane(pane_event) => {
-                pane_group.handle_pane_event(pane_id, pane_event, ctx)
-            }
-        });
+        ctx.subscribe_to_view(
+            &preview_view,
+            move |pane_group, _, event, ctx| match event {
+                PreviewViewEvent::Pane(pane_event) => {
+                    pane_group.handle_pane_event(pane_id, pane_event, ctx)
+                }
+            },
+        );
         ctx.subscribe_to_view(&self.view, move |group, _, event, ctx| {
             group.handle_pane_view_event(pane_id, event, ctx);
         });

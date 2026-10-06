@@ -4,7 +4,9 @@
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::TcpStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use serde_json::{Map, Value, json};
 use tungstenite::stream::MaybeTlsStream;
@@ -96,18 +98,30 @@ impl Cdp {
     }
 
     /// Sends a command without waiting for its response, returning its id.
-    pub fn send(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<u64, String> {
+    pub fn send(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id += 1;
         self.socket
-            .send(WsMessage::text(command_message(id, method, params, session)))
+            .send(WsMessage::text(command_message(
+                id, method, params, session,
+            )))
             .map_err(|err| format!("Lost the connection to Chromium: {err}"))?;
         Ok(id)
     }
 
     /// Sends a command and waits for its result. Events that arrive meanwhile are kept for
     /// [`Self::next_event`].
-    pub fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value, String> {
+    pub fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value, String> {
         let id = self.send(method, params, session)?;
         let deadline = Instant::now() + CALL_TIMEOUT;
         while Instant::now() < deadline {

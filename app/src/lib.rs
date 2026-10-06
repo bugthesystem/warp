@@ -56,9 +56,9 @@ mod palette;
 mod persistence;
 mod platform;
 mod prefix;
+mod preview;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
-mod preview;
 mod pricing;
 mod profiling;
 mod projects;

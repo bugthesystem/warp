@@ -157,13 +157,11 @@ impl BrowserMcpServer {
             tools.extend(tool_definitions());
         }
         if self.0.preview.is_some() {
-            tools.extend(
-                warp_preview::agent::tool_definitions()
-                    .into_iter()
-                    .map(|(name, description, properties, required)| {
-                        tool(name, description, properties, required)
-                    }),
-            );
+            tools.extend(warp_preview::agent::tool_definitions().into_iter().map(
+                |(name, description, properties, required)| {
+                    tool(name, description, properties, required)
+                },
+            ));
         }
         tools
     }

@@ -7,7 +7,9 @@ mod stage;
 mod streams;
 mod view;
 
-use warpui::{AppContext, Entity, SingletonEntity, ViewContext, ViewHandle, WeakViewHandle, WindowId};
+use warpui::{
+    AppContext, Entity, SingletonEntity, ViewContext, ViewHandle, WeakViewHandle, WindowId,
+};
 
 pub use agent::PreviewAgent;
 pub use pip::PreviewPipView;
