@@ -12,11 +12,12 @@ use warpui::elements::{
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use super::PreviewRegistry;
+use super::playing::{self, PlayingInput};
 use super::stage::{StageAction, StageMouseStates, StageOptions, render_stage};
 use super::streams::{ChromiumState, PreviewId, PreviewStreams};
 use crate::browser::AgentApproval;
@@ -100,6 +101,8 @@ pub struct PreviewView {
     agent_step: Option<String>,
     agent_step_generation: u64,
     approval: Option<AppApproval>,
+    focused: bool,
+    playing_input: PlayingInput,
 }
 
 impl PreviewView {
@@ -156,6 +159,8 @@ impl PreviewView {
             agent_step: None,
             agent_step_generation: 0,
             approval: None,
+            focused: false,
+            playing_input: PlayingInput::default(),
         };
         view.stage_mouse_states.ensure_cards(view.cards.len());
         view.refresh_start_page(ctx);
@@ -383,6 +388,7 @@ impl PreviewView {
         match action {
             StageAction::BringToFront(id) => {
                 self.front = Some(*id);
+                self.playing_input = PlayingInput::default();
                 self.sync_title(ctx);
                 ctx.notify();
             }
@@ -411,6 +417,21 @@ impl PreviewView {
                 ctx.notify();
             }
             StageAction::ResolveApproval(decision) => self.resolve_approval(*decision, ctx),
+            StageAction::SetPlaying(playing) => {
+                let Some(front) = self.front else {
+                    return;
+                };
+                self.playing_input = PlayingInput::default();
+                if let Err(notice) = playing::set_playing(front, *playing, ctx) {
+                    self.show_notice(notice, ctx);
+                }
+            }
+            StageAction::Input(input) => {
+                if let Some(front) = self.front {
+                    self.playing_input
+                        .forward(front, input, &self.position_id, ctx);
+                }
+            }
         }
     }
 
@@ -805,6 +826,20 @@ impl View for PreviewView {
         "PreviewView"
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.focused = true;
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.focused = false;
+            ctx.notify();
+        }
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let front = match self.front {
             Some(front) if !self.show_start_page => front,
@@ -817,6 +852,7 @@ impl View for PreviewView {
             StageOptions {
                 position_id: &self.position_id,
                 in_picture_in_picture: false,
+                focused: self.focused,
                 approval: self
                     .approval
                     .as_ref()

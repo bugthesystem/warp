@@ -8,6 +8,7 @@
 pub mod agent;
 pub mod browser;
 pub mod geometry;
+pub mod input;
 #[cfg(not(target_family = "wasm"))]
 pub mod jpeg;
 mod stream;

@@ -5,20 +5,24 @@
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::appearance::Appearance;
+use warp_preview::Source;
+use warp_preview::input::{Modifiers, PointerButton};
 use warpui::assets::asset_cache::AssetSource;
-use warpui::fonts::FamilyId;
 use warpui::elements::{
-    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Flex, Hoverable, Image, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-    Stack, Text,
+    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, Empty, EventDispatchMode, EventHandler, Flex, Hoverable, Image,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, Stack, Text,
 };
-use warpui::scene::DropShadow;
+use warpui::event::ModifiersState;
+use warpui::fonts::FamilyId;
 use warpui::image_cache::CacheOption;
+use warpui::keymap::Keystroke;
+use warpui::scene::DropShadow;
 use warpui::ui_components::components::UiComponent;
-use warpui::{Action, AppContext, Element, SingletonEntity};
+use warpui::{Action, AppContext, Element, EventContext, SingletonEntity};
 
 use super::streams::{ChromiumState, Preview, PreviewId, PreviewStatus, PreviewStreams};
 use crate::browser::AgentApproval;
@@ -73,16 +77,17 @@ const STAGE_MUTED: ColorU = ColorU {
     b: 178,
     a: 255,
 };
-const DISABLED: ColorU = ColorU {
-    r: 169,
-    g: 182,
-    b: 178,
-    a: 110,
-};
 const LIT: ColorU = ColorU {
     r: 15,
     g: 138,
     b: 121,
+    a: 255,
+};
+/// Marks a preview that takes the user's input.
+const PLAYING: ColorU = ColorU {
+    r: 94,
+    g: 162,
+    b: 255,
     a: 255,
 };
 const AGENT: ColorU = ColorU {
@@ -105,8 +110,42 @@ pub enum StageAction {
     TogglePictureInPicture,
     AddPreview,
     ResolveApproval(AgentApproval),
+    /// Switches the front preview between Watching and Playing.
+    SetPlaying(bool),
+    /// Pointer or keyboard input on the front preview while it is playing.
+    Input(StageInput),
 }
 
+/// The user's input on a playing preview. Positions are window points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StageInput {
+    Down {
+        at: (i32, i32),
+        button: PointerButton,
+        modifiers: Modifiers,
+    },
+    Up {
+        at: (i32, i32),
+    },
+    Drag {
+        at: (i32, i32),
+    },
+    /// The pointer moved over the picture with no button held.
+    Hover {
+        at: (i32, i32),
+    },
+    /// A wheel or trackpad scroll, in points as AppKit reports them.
+    Scroll {
+        delta: (i32, i32),
+    },
+    Key(Keystroke),
+}
+
+impl StageInput {
+    pub fn point(position: Vector2F) -> (i32, i32) {
+        (position.x().round() as i32, position.y().round() as i32)
+    }
+}
 /// Mouse state for everything clickable on a stage. Owned by the view showing the stage.
 #[derive(Default)]
 pub struct StageMouseStates {
@@ -139,6 +178,8 @@ pub struct StageOptions<'a> {
     /// Whether the stage is the picture-in-picture window, which changes the pop-out button and
     /// shrinks the pile.
     pub in_picture_in_picture: bool,
+    /// Whether the view showing the stage has keyboard focus, so a playing preview takes keys.
+    pub focused: bool,
     /// An app an agent is waiting for the user to approve.
     pub approval: Option<&'a str>,
     /// What an agent is doing with the front preview right now.
@@ -158,19 +199,26 @@ pub fn render_stage<A: Action + Clone>(
     let appearance = Appearance::as_ref(app);
     let streams = PreviewStreams::as_ref(app);
     let front_preview = streams.get(front);
+    let playing = front_preview.is_some_and(|preview| preview.playing);
 
-    let mut picture = Stack::new().with_child(
-        // Saved for a single frame so the stage counts as hidden whenever it is not drawn,
-        // which pauses its previews.
-        SavePosition::new(
-            render_picture(front_preview, streams, mouse_states, wrap, appearance),
-            options.position_id,
-        )
-        .for_single_frame()
-        .finish(),
-    );
+    // Saved for a single frame so the stage counts as hidden whenever it is not drawn, which
+    // pauses its previews.
+    let mut picture_element = SavePosition::new(
+        render_picture(front_preview, streams, mouse_states, wrap, appearance),
+        options.position_id,
+    )
+    .for_single_frame()
+    .finish();
+    if playing {
+        picture_element = forward_input(picture_element, options.focused, wrap);
+    }
+    // The controls over the picture take their own clicks; in the default broadcast mode a click
+    // on them would also reach a playing preview underneath.
+    let mut picture = Stack::new()
+        .with_event_dispatch_mode(EventDispatchMode::Waterfall)
+        .with_child(picture_element);
     picture.add_positioned_child(
-        render_badge(options.agent_step, appearance),
+        render_badge(options.agent_step, playing, appearance),
         OffsetPositioning::offset_from_parent(
             vec2f(-12., 12.),
             ParentOffsetBounds::ParentByPosition,
@@ -179,7 +227,7 @@ pub fn render_stage<A: Action + Clone>(
         ),
     );
     picture.add_positioned_child(
-        render_bar(&options, mouse_states, wrap, appearance),
+        render_bar(&options, front_preview, mouse_states, wrap, appearance),
         OffsetPositioning::offset_from_parent(
             vec2f(0., -12.),
             ParentOffsetBounds::ParentByPosition,
@@ -260,6 +308,93 @@ fn frame_image_from(asset: AssetSource, opacity: f32) -> Box<dyn Element> {
             PICTURE_CORNER_RADIUS,
         )))
         .finish()
+}
+
+/// Sends the user's pointer and, while `focused`, keys over `picture` to the front preview.
+fn forward_input<A: Action + Clone>(
+    picture: Box<dyn Element>,
+    focused: bool,
+    wrap: fn(StageAction) -> A,
+) -> Box<dyn Element> {
+    let send = move |ctx: &mut EventContext, input: StageInput| {
+        ctx.dispatch_typed_action(wrap(StageAction::Input(input)));
+        DispatchEventResult::StopPropagation
+    };
+    let modifiers = |state: &ModifiersState| Modifiers {
+        cmd: state.cmd,
+        shift: state.shift,
+        alt: state.alt,
+        ctrl: state.ctrl,
+    };
+    let mut handler = EventHandler::new(picture)
+        .on_left_mouse_down(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            )
+        })
+        .on_left_mouse_up(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Up {
+                    at: StageInput::point(position),
+                },
+            )
+        })
+        .on_mouse_dragged(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Drag {
+                    at: StageInput::point(position),
+                },
+            )
+        })
+        .on_right_mouse_down(move |ctx, _, position, state| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Right,
+                    modifiers: modifiers(state),
+                },
+            )
+        })
+        .on_middle_mouse_down(move |ctx, _, position| {
+            send(
+                ctx,
+                StageInput::Down {
+                    at: StageInput::point(position),
+                    button: PointerButton::Middle,
+                    modifiers: Modifiers::default(),
+                },
+            )
+        })
+        .on_mouse_in(
+            move |ctx, _, position| {
+                ctx.dispatch_typed_action(wrap(StageAction::Input(StageInput::Hover {
+                    at: StageInput::point(position),
+                })));
+                DispatchEventResult::PropagateToParent
+            },
+            None,
+        )
+        .on_scroll_wheel(move |ctx, _, delta, _| {
+            send(
+                ctx,
+                StageInput::Scroll {
+                    delta: StageInput::point(delta),
+                },
+            )
+        });
+    if focused {
+        handler = handler
+            .on_keydown(move |ctx, _, keystroke| send(ctx, StageInput::Key(keystroke.clone())));
+    }
+    handler.finish()
 }
 
 /// What to show over or instead of the picture, when the preview is not simply live.
@@ -345,11 +480,16 @@ fn status_message<A: Action + Clone>(
     )
 }
 
-/// The "Watching" badge, or what an agent is doing while it acts.
-fn render_badge(agent_step: Option<&str>, appearance: &Appearance) -> Box<dyn Element> {
-    let (dot, label) = match agent_step {
-        Some(step) => (AGENT, step.to_owned()),
-        None => (LIT, "Watching".to_owned()),
+/// "Watching" or "Playing", or what an agent is doing while it acts.
+fn render_badge(
+    agent_step: Option<&str>,
+    playing: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let (dot, label) = match (agent_step, playing) {
+        (Some(step), _) => (AGENT, step.to_owned()),
+        (None, true) => (PLAYING, "Playing".to_owned()),
+        (None, false) => (LIT, "Watching".to_owned()),
     };
     Container::new(
         Flex::row()
@@ -384,27 +524,42 @@ fn render_badge(agent_step: Option<&str>, appearance: &Appearance) -> Box<dyn El
 /// The thin floating bar of icon buttons over the bottom of the picture.
 fn render_bar<A: Action + Clone>(
     options: &StageOptions<'_>,
+    front: Option<&Preview>,
     mouse_states: &StageMouseStates,
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let playing = front.is_some_and(|preview| preview.playing);
+    let lit_when = |lit: bool| {
+        if lit {
+            BarButtonState::Lit
+        } else {
+            BarButtonState::Normal
+        }
+    };
+    let play_tip = match front.map(|preview| &preview.source) {
+        Some(Source::Window(_)) => {
+            "Playing: your pointer and keys go to the window, which stays behind Warp"
+        }
+        Some(Source::Browser { .. }) | None => "Playing: your pointer and keys go to the page",
+    };
     let switch = Container::new(
         Flex::row()
             .with_spacing(1.)
             .with_child(bar_button(
                 Icon::Eye,
                 "Watching: your input stays in Warp",
-                BarButtonState::Lit,
+                lit_when(!playing),
                 &mouse_states.watch,
-                None::<A>,
+                Some(wrap(StageAction::SetPlaying(false))),
                 appearance,
             ))
             .with_child(bar_button(
                 Icon::Hand,
-                "Control with pointer and keys: coming next",
-                BarButtonState::Disabled,
+                play_tip,
+                lit_when(playing),
                 &mouse_states.control,
-                None::<A>,
+                Some(wrap(StageAction::SetPlaying(true))),
                 appearance,
             ))
             .finish(),
@@ -490,7 +645,6 @@ fn separator() -> Box<dyn Element> {
 enum BarButtonState {
     Normal,
     Lit,
-    Disabled,
 }
 
 /// An icon button in the bar. Its tooltip appears above it right away, since the bar has no
@@ -505,14 +659,11 @@ fn bar_button<A: Action + Clone>(
 ) -> Box<dyn Element> {
     let ui_builder = appearance.ui_builder().clone();
     let hoverable = Hoverable::new(mouse_state.clone(), move |mouse| {
-        let color = match state {
-            BarButtonState::Normal | BarButtonState::Lit => STAGE_TEXT,
-            BarButtonState::Disabled => DISABLED,
-        };
+        let color = STAGE_TEXT;
         let background = match state {
             BarButtonState::Lit => Some(LIT),
             BarButtonState::Normal if mouse.is_hovered() => Some(GLASS_HOVER),
-            BarButtonState::Normal | BarButtonState::Disabled => None,
+            BarButtonState::Normal => None,
         };
         let mut button = Container::new(
             Align::new(

@@ -151,7 +151,7 @@ fn run(
     chromium: &Path,
     profile: &Path,
     url: &str,
-    viewport: (u32, u32),
+    mut viewport: (u32, u32),
     rate: Rate,
     control: &mpsc::Receiver<Control>,
     events: &async_channel::Sender<StreamEvent>,
@@ -189,7 +189,13 @@ fn run(
                     cdp.send("Page.navigate", json!({"url": url}), session)?;
                 }
                 Ok(Control::Resize(width, height)) => {
-                    set_viewport(&mut cdp, (width, height), session)?;
+                    viewport = (width, height);
+                    set_viewport(&mut cdp, viewport, session)?;
+                }
+                Ok(Control::Input(event)) => {
+                    for (method, params) in super::input::commands(&event, viewport) {
+                        cdp.send(method, params, session)?;
+                    }
                 }
                 Ok(Control::Stop) | Err(mpsc::TryRecvError::Disconnected) => {
                     let _ = cdp.send("Browser.close", json!({}), None);
