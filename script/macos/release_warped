@@ -27,6 +27,9 @@ if (( FREE_GB < REQUIRED_GB )); then
   exit 1
 fi
 
+# A release build never reuses incremental caches, which would only take disk space.
+export CARGO_INCREMENTAL=0
+
 FEATURES="browser_pane"
 # The preview pane lands separately; turn it on once its cargo feature exists.
 if grep -q '^preview_pane = ' app/Cargo.toml; then
@@ -64,3 +67,6 @@ ZIP="$OUT_DIR/Warped-$VERSION-$ARCH.zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "Built $ZIP"
 shasum -a 256 "$ZIP"
+
+# The zipped app is the release; the intermediate bundle takes a few GB and is rebuilt every time.
+rm -rf "target/$ARCH-apple-darwin/release-lto/bundle"
