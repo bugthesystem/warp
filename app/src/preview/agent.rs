@@ -118,13 +118,22 @@ impl PreviewAgent {
         ctx.notify();
     }
 
-    /// Applies the user's decision on `key` to every call waiting on it.
+    /// Applies the user's decision on `key` to every call waiting on it, once the caller returns.
     pub fn resolve_approval(
         &mut self,
         key: &str,
         decision: AgentApproval,
         ctx: &mut ModelContext<Self>,
     ) {
+        // The decision arrives from the action handler of the view showing the prompt, and that
+        // view can't be reached until its handler returns; opening a preview adds to it.
+        let key = key.to_owned();
+        ctx.spawn(async {}, move |me, _, ctx| {
+            me.apply_approval(&key, decision, ctx)
+        });
+    }
+
+    fn apply_approval(&mut self, key: &str, decision: AgentApproval, ctx: &mut ModelContext<Self>) {
         if decision == AgentApproval::Always {
             self.approved.approve(key.to_owned());
             if let Some(path) = &self.approved_path
