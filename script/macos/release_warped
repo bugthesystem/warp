@@ -16,6 +16,16 @@ ARCH="${2:-aarch64}"
 
 cd "$(git rev-parse --show-toplevel)"
 
+# A release-lto build from scratch writes about 25 GB under target/. Running out of space part way
+# fails half an hour in, so check first. WARPED_REQUIRED_GB overrides the estimate.
+REQUIRED_GB="${WARPED_REQUIRED_GB:-25}"
+FREE_GB=$(df -Pk . | awk 'NR == 2 { print int($4 / 1048576) }')
+if (( FREE_GB < REQUIRED_GB )); then
+  echo "Only ${FREE_GB} GB is free; building Warped needs about ${REQUIRED_GB} GB." >&2
+  echo "Free some space, for example with 'cargo clean --profile dev', and try again." >&2
+  exit 1
+fi
+
 FEATURES="browser_pane"
 # The preview pane lands separately; turn it on once its cargo feature exists.
 if grep -q '^preview_pane = ' app/Cargo.toml; then
