@@ -1562,7 +1562,7 @@ fn screenshot_path() -> PathBuf {
 
 fn reveal_in_finder(path: &Path) {
     #[cfg(target_os = "macos")]
-    if let Err(err) = std::process::Command::new("open")
+    if let Err(err) = command::blocking::Command::new("open")
         .arg("-R")
         .arg(path)
         .spawn()
