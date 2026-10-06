@@ -381,6 +381,8 @@ else
     CARGO_PROFILE="release-lto"
   fi
 fi
+# WARP_CARGO_PROFILE overrides the inferred profile, e.g. `release` for a quicker build without LTO.
+CARGO_PROFILE="${WARP_CARGO_PROFILE:-$CARGO_PROFILE}"
 
 TARGET_PROFILE_DIR="$CARGO_PROFILE"
 if [[ "$CARGO_PROFILE" == "dev" ]]; then

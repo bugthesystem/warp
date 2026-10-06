@@ -53,7 +53,7 @@ for target in "${targets[@]}"; do
   # bound across branches. Release bundles are rebuilt by every release.
   while IFS= read -r dir; do
     candidates+=("$dir")
-  done < <(find "$target" -maxdepth 3 -type d \( -name incremental -o -path '*/release-lto/bundle' \) 2>/dev/null)
+  done < <(find "$target" -maxdepth 3 -type d \( -name incremental -o -path '*/release-lto/bundle' -o -path '*/release/bundle' \) 2>/dev/null)
   [[ -d "$target/warped/Warped.app" ]] && candidates+=("$target/warped/Warped.app")
 done
 
