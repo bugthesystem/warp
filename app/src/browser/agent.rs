@@ -240,6 +240,20 @@ impl BrowserAgent {
         decision: AgentApproval,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Decisions arrive from a browser pane's action handler, and that pane can't be reached
+        // until its handler returns; running the waiting calls drives it.
+        let site = site.to_owned();
+        ctx.spawn(async {}, move |me, _, ctx| {
+            me.apply_approval(&site, decision, ctx)
+        });
+    }
+
+    fn apply_approval(
+        &mut self,
+        site: &str,
+        decision: AgentApproval,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if decision == AgentApproval::Always {
             self.approved_sites.approve(site.to_owned());
             self.save_approved_sites();

@@ -306,7 +306,10 @@ impl BrowserView {
         if !std::mem::take(&mut self.page_focused) {
             return;
         }
-        if let Some(placed) = &self.active().webview
+        if let Some(placed) = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.webview.as_ref())
             && let Err(err) = placed.webview.focus_parent()
         {
             report_error!(anyhow::Error::new(err).context("Failed to unfocus browser page"));
@@ -457,6 +460,9 @@ impl BrowserView {
             ctx.emit(BrowserViewEvent::Pane(PaneEvent::Close));
             return;
         }
+        // Hands keyboard focus back before the tab goes, while the active index still points at
+        // a tab.
+        self.unfocus_page();
         self.tabs.remove(index);
         let active = if index < self.active_tab || self.active_tab == self.tabs.len() {
             self.active_tab.saturating_sub(1)

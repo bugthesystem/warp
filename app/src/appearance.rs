@@ -215,12 +215,18 @@ impl AppearanceManager {
                 // Reset to nil to use the bundle's default icon.
                 // SAFETY: `setApplicationIconImage:` accepts `nil` to restore the bundled icon.
                 unsafe { ns_app.setApplicationIconImage(None) };
-                workspace.setIcon_forFile_options(
-                    None,
-                    &bundle_path,
-                    NSWorkspaceIconCreationOptions::empty(),
-                );
-                workspace.noteFileSystemChanged_(&bundle_path);
+                // A custom Finder icon lives in an `Icon\r` file in the bundle. Writing to the
+                // bundle when there is none makes macOS ask whether Warp may modify apps, so only
+                // reset an icon that was set.
+                let custom_icon = std::path::Path::new(&bundle_path.to_string()).join("Icon\r");
+                if custom_icon.exists() {
+                    workspace.setIcon_forFile_options(
+                        None,
+                        &bundle_path,
+                        NSWorkspaceIconCreationOptions::empty(),
+                    );
+                    workspace.noteFileSystemChanged_(&bundle_path);
+                }
                 return;
             }
 
