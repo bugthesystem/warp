@@ -16,7 +16,7 @@ use warpui::{AppContext, View, id};
 pub use agent::{BrowserAgent, mcp_token, mcp_url, terminal_env_vars, write_claude_code_plugin};
 pub use history::BrowserHistoryModel;
 pub use registry::{BrowserViewRegistry, sync_webviews};
-pub use view::{AgentApproval, BrowserView, BrowserViewAction, BrowserViewEvent};
+pub use view::{BrowserView, BrowserViewAction, BrowserViewEvent};
 
 pub fn init(app: &mut AppContext) {
     let context = id!(BrowserView::ui_name());

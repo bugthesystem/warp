@@ -18,7 +18,8 @@ use warpui::{
     Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle,
 };
 
-use super::{AgentApproval, BrowserView, BrowserViewRegistry};
+use super::view::AgentApproval;
+use super::{BrowserView, BrowserViewRegistry};
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 type ToolResult = Result<ToolOutput, String>;
@@ -177,7 +178,9 @@ impl BrowserAgent {
         }
         for pending in std::mem::take(&mut self.pending) {
             if let Some(view) = pending.view.upgrade(ctx) {
-                view.update(ctx, |view, ctx| view.clear_agent_approval(&pending.site, ctx));
+                view.update(ctx, |view, ctx| {
+                    view.clear_agent_approval(&pending.site, ctx)
+                });
             }
             let _ = pending.reply.send(Err(STOPPED_MESSAGE.to_owned()));
         }
@@ -248,7 +251,9 @@ impl BrowserAgent {
         self.pending = pending;
         for pending in resolved {
             if let Some(view) = pending.view.upgrade(ctx) {
-                view.update(ctx, |view, ctx| view.clear_agent_approval(&pending.site, ctx));
+                view.update(ctx, |view, ctx| {
+                    view.clear_agent_approval(&pending.site, ctx)
+                });
             }
             match decision {
                 AgentApproval::Once | AgentApproval::Always => {

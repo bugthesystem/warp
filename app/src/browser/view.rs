@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use warp_browser::annotation::{
-    PageAnnotation, SEND_NOTES_ACTION, annotate_script, format_annotations,
-};
+#[cfg(not(target_family = "wasm"))]
+use warp_browser::annotation::format_annotations;
+use warp_browser::annotation::{PageAnnotation, SEND_NOTES_ACTION, annotate_script};
 use warp_browser::local_servers::LocalServer;
 use warp_browser::screenshot;
 use warp_browser::{WebView, WebViewEvent};
@@ -585,6 +585,8 @@ impl BrowserView {
             )));
             self.show_notice("Notes sent to your agent", ctx);
         }
+        #[cfg(target_family = "wasm")]
+        let _ = ctx;
     }
 
     fn handle_page_action(&mut self, action: &str, ctx: &mut ViewContext<Self>) {
@@ -739,6 +741,8 @@ impl BrowserView {
                     #[cfg(not(target_family = "wasm"))]
                     super::BrowserAgent::handle(ctx)
                         .update(ctx, |agent, ctx| agent.add_annotation(annotation, ctx));
+                    #[cfg(target_family = "wasm")]
+                    let _ = annotation;
                 }
                 None => log::warn!("Ignored a malformed browser annotation"),
             },
