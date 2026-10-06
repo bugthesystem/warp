@@ -38,8 +38,19 @@ pub(super) fn set_playing<V: View>(
             return Err(NOT_ON_THIS_DESKTOP);
         }
     }
-    PreviewStreams::handle(ctx)
-        .update(ctx, |streams, ctx| streams.set_playing(front, playing, ctx));
+    PreviewStreams::handle(ctx).update(ctx, |streams, ctx| {
+        streams.set_playing(front, playing, ctx);
+        // A window takes background input only once it has been activated, which costs the first
+        // event it gets. Spend that on a pointer move now rather than on the user's first click.
+        if playing && window_id.is_some() {
+            streams.send_input(
+                front,
+                InputEvent::Move {
+                    at: vec2f(0.5, 0.5),
+                },
+            );
+        }
+    });
     if playing {
         ctx.focus_self();
     }

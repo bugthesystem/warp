@@ -49,6 +49,10 @@ pub enum Key {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
+    /// The pointer moved with no button held.
+    Move {
+        at: Vector2F,
+    },
     /// The pointer moved while a button is held.
     Drag {
         at: Vector2F,

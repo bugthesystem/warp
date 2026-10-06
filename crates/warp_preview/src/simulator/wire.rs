@@ -134,7 +134,8 @@ pub(crate) fn input_lines(event: &InputEvent, screen: (f64, f64)) -> Vec<String>
                 json!({"type": "tap", "x": x, "y": y, "duration": 0.05}),
             )]
         }
-        InputEvent::Up { .. } => Vec::new(),
+        // A touchscreen has no pointer to move.
+        InputEvent::Up { .. } | InputEvent::Move { .. } => Vec::new(),
         InputEvent::Scroll { at, delta } => {
             let (x, y) = to_screen(*at);
             // Content scrolls down when the finger moves up.
