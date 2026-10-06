@@ -22,7 +22,7 @@ OUT_DIR="target/warped"
 APP="$OUT_DIR/Warped.app"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
-cp -R target/release-lto/bundle/osx/WarpOss.app "$APP"
+cp -R "target/$ARCH-apple-darwin/release-lto/bundle/osx/WarpOss.app" "$APP"
 
 PLIST="$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "Warped" "$PLIST"
