@@ -146,7 +146,6 @@ use ::ai::index::full_source_code_embedding::manager::{
 use ::ai::project_context::model::ProjectContextModel;
 pub use ai::agent::todos::AIAgentTodoList;
 pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
-pub use browser::BrowserViewRegistry;
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
@@ -158,6 +157,7 @@ use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
 use auth::auth_manager::{AuthManager, AuthManagerEvent};
 use auth::auth_state::{AuthState, AuthStateProvider};
+pub use browser::BrowserViewRegistry;
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
 use code_review::GlobalCodeReviewModel;
