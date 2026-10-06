@@ -45,11 +45,16 @@ When the `preview_*` tools are available, Warp can also show a page in a headles
 another app's window such as a game engine, a running game or a simulator, live in a preview pane.
 
 1. `preview_targets` lists open previews and other apps' windows with their ids.
-2. `preview_open` with `url` or `window` shows it and replies with its first picture.
+2. `preview_open` with `url`, `window` or `device` (an iOS simulator by name, run without its
+   own window) shows it and replies with its first picture.
 3. After changing code or a scene, `preview_look` returns the current picture and the recent log
    (console messages and errors for pages) in one call. `preview_screenshot` returns only the
    picture, full size on request.
+4. `preview_click`, `preview_drag`, `preview_scroll`, `preview_type` and `preview_key` act on the
+   preview like the user's pointer and keyboard, without moving the user's pointer or raising the
+   window. Positions are pixels in the picture `preview_look` returns (its reply says the size),
+   and each replies with a picture of the result. Click a field before typing into it.
 
-Previews are for watching: change scenes and assets through the engine's own MCP server or the
-shell, then look again. Warp asks the user before you see another app's window or a page that is
+Change scenes and assets through the engine's own MCP server or the shell when it has one, then
+look again; use the input tools for what only the UI can do. Warp asks the user before you see another app's window or a page that is
 not local; if they deny it, do not retry.

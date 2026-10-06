@@ -18,7 +18,7 @@ use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::{
     AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
 };
-use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS};
+use wry::{PageLoadEvent, Rect, WebViewBuilder, WebViewExtMacOS, WryWebView};
 
 use crate::agent::CONSOLE_CAPTURE_SCRIPT;
 use crate::annotation::{ANNOTATE_EXITED_MESSAGE, ANNOTATION_MESSAGE_PREFIX};
@@ -182,87 +182,26 @@ impl WebView {
 
     /// Clicks at `x`, `y` (logical pixels from the web view's top-left corner) with native mouse
     /// events, which pages cannot tell from the user's own. The user's pointer does not move.
-    /// Returns whether the events were sent, which needs the web view to be in a window.
+    /// Returns whether the click was scheduled, which needs the web view to be in a window.
     pub fn click_at(&self, x: f32, y: f32) -> bool {
         let view = self.webview.webview();
-        let Some(window) = view.window() else {
+        if view.window().is_none() {
             return false;
-        };
-        let y = if view.isFlipped() {
-            y
-        } else {
-            view.bounds().size.height as f32 - y
-        };
-        let location = view.convertPoint_toView(NSPoint::new(x.into(), y.into()), None);
-        let mouse_event = |event_type| {
-            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-                event_type,
-                location,
-                NSEventModifierFlags::empty(),
-                NSProcessInfo::processInfo().systemUptime(),
-                window.windowNumber(),
-                None,
-                0,
-                1,
-                1.,
-            )
-        };
-        let (Some(moved), Some(down), Some(up)) = (
-            mouse_event(NSEventType::MouseMoved),
-            mouse_event(NSEventType::LeftMouseDown),
-            mouse_event(NSEventType::LeftMouseUp),
-        ) else {
-            return false;
-        };
-        view.mouseMoved(&moved);
-        view.mouseDown(&down);
-        view.mouseUp(&up);
+        }
+        on_main_queue_later(view, move |view| click_at(view, x, y));
         true
     }
 
     /// Types `text`, then presses Return when `submit`, with native key events into the page's
     /// focused element. Keyboard focus moves to the page while typing and then goes back. Returns
-    /// whether the events were sent, which needs the web view to be in the key window.
+    /// whether typing was scheduled, which needs the web view to be in the key window.
     pub fn type_text(&self, text: &str, submit: bool) -> bool {
         let view = self.webview.webview();
-        let Some(window) = view.window().filter(|window| window.isKeyWindow()) else {
+        if !view.window().is_some_and(|window| window.isKeyWindow()) {
             return false;
-        };
-        let key_event = |event_type, characters: &NSString, key_code| {
-            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
-                event_type,
-                NSPoint::ZERO,
-                NSEventModifierFlags::empty(),
-                NSProcessInfo::processInfo().systemUptime(),
-                window.windowNumber(),
-                None,
-                characters,
-                characters,
-                false,
-                key_code,
-            )
-        };
-        let press = |characters: &str, key_code| {
-            let characters = NSString::from_str(characters);
-            if let (Some(down), Some(up)) = (
-                key_event(NSEventType::KeyDown, &characters, key_code),
-                key_event(NSEventType::KeyUp, &characters, key_code),
-            ) {
-                view.keyDown(&down);
-                view.keyUp(&up);
-            }
-        };
-
-        let previous_responder = window.firstResponder();
-        window.makeFirstResponder(Some(&view));
-        let mut buffer = [0; 4];
-        for character in text.chars() {
-            press(character.encode_utf8(&mut buffer), 0);
         }
-        if submit {
-            press("\r", RETURN_KEY_CODE);
-        }
-        window.makeFirstResponder(previous_responder.as_deref());
+        let text = text.to_owned();
+        on_main_queue_later(view, move |view| type_text(view, &text, submit));
         true
     }
 
@@ -308,4 +247,98 @@ fn to_wry_rect(bounds: RectF) -> Rect {
         position: LogicalPosition::new(bounds.origin_x(), bounds.origin_y()).into(),
         size: LogicalSize::new(bounds.width(), bounds.height()).into(),
     }
+}
+
+/// Moves `view` into a block that runs on the main queue once the current turn ends.
+///
+/// Native events make WebKit change the first responder, which calls back into Warp's window. Sent
+/// while Warp is handling an agent's request, that re-entry would find the app already borrowed.
+fn on_main_queue_later(view: Retained<WryWebView>, run: impl FnOnce(&WryWebView) + 'static) {
+    struct OnMainQueue<T>(T);
+    // SAFETY: the value is only touched by the block below, which runs on the main queue, the
+    // thread the web view and `run` belong to.
+    unsafe impl<T> Send for OnMainQueue<T> {}
+    let job = OnMainQueue((view, run));
+    dispatch::Queue::main().exec_async(move || {
+        // Binding the wrapper whole makes the closure capture it, not its fields.
+        let job = job;
+        let OnMainQueue((view, run)) = job;
+        run(&view);
+    });
+}
+
+fn click_at(view: &WryWebView, x: f32, y: f32) {
+    let Some(window) = view.window() else {
+        return;
+    };
+    let y = if view.isFlipped() {
+        y
+    } else {
+        view.bounds().size.height as f32 - y
+    };
+    let location = view.convertPoint_toView(NSPoint::new(x.into(), y.into()), None);
+    let mouse_event = |event_type| {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            event_type,
+            location,
+            NSEventModifierFlags::empty(),
+            NSProcessInfo::processInfo().systemUptime(),
+            window.windowNumber(),
+            None,
+            0,
+            1,
+            1.,
+        )
+    };
+    let (Some(moved), Some(down), Some(up)) = (
+        mouse_event(NSEventType::MouseMoved),
+        mouse_event(NSEventType::LeftMouseDown),
+        mouse_event(NSEventType::LeftMouseUp),
+    ) else {
+        return;
+    };
+    view.mouseMoved(&moved);
+    view.mouseDown(&down);
+    view.mouseUp(&up);
+}
+
+fn type_text(view: &WryWebView, text: &str, submit: bool) {
+    let Some(window) = view.window() else {
+        return;
+    };
+    let key_event = |event_type, characters: &NSString, key_code| {
+        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            event_type,
+            NSPoint::ZERO,
+            NSEventModifierFlags::empty(),
+            NSProcessInfo::processInfo().systemUptime(),
+            window.windowNumber(),
+            None,
+            characters,
+            characters,
+            false,
+            key_code,
+        )
+    };
+    let press = |characters: &str, key_code| {
+        let characters = NSString::from_str(characters);
+        if let (Some(down), Some(up)) = (
+            key_event(NSEventType::KeyDown, &characters, key_code),
+            key_event(NSEventType::KeyUp, &characters, key_code),
+        ) {
+            view.keyDown(&down);
+            view.keyUp(&up);
+        }
+    };
+
+    let previous_responder = window.firstResponder();
+    window.makeFirstResponder(Some(view));
+    let mut buffer = [0; 4];
+    for character in text.chars() {
+        press(character.encode_utf8(&mut buffer), 0);
+    }
+    if submit {
+        press("\r", RETURN_KEY_CODE);
+    }
+    window.makeFirstResponder(previous_responder.as_deref());
 }

@@ -14,7 +14,7 @@ The new work is capturing frames, presenting them, mapping input, and the simula
 | --- | --- | --- | --- |
 | Page (dev servers, any URL) | Headless Chromium started by Warp (`--headless --remote-debugging-port=0`, throwaway profile), `Page.startScreencast` JPEG frames over the DevTools protocol; console, errors and log entries from `Runtime`/`Log` events | DevTools `Input.dispatchMouseEvent` / `dispatchKeyEvent` (Playing) | Local servers from `lsof`, as the browser pane's new-tab page |
 | Window (Blender, Unity, Godot, Defold, game builds, any app) | ScreenCaptureKit: `SCContentFilter(desktopIndependentWindow:)`, `SCStream`, cursor hidden; frames whose `SCFrameStatus` is not `complete` are dropped | `computer_use` with `Target::Window`; pane points mapped through the letterbox to the window's content rect (title bar and backing scale removed), bounds read per event | `SCShareableContent` windows, excluding Warp's |
-| iOS Simulator | `baguette stream --udid … --format avcc` (H.264, length-prefixed) as a child process | one long-lived `baguette input --udid …` per device, JSON lines (`tap`, `swipe`, `key`, `type`, `button`) in device points | `xcrun simctl list devices booted` / `baguette list` |
+| iOS Simulator | `baguette stream --udid … --format mjpeg` as a child process: JPEG parts of a multipart stream, read by `Content-Length` and passed through untouched, restarted at a new frame rate and downscale when the rate changes | one long-lived `baguette input --udid …` per device, JSON lines (`touch1-down/move/up` for drags, `tap`, `swipe` for scrolling, `key` by W3C code, `type`) in device points from `baguette chrome layout` | `xcrun simctl list devices available -j` (iOS runtimes) |
 | Android Emulator | emulator gRPC `EmulatorController.streamScreenshot` (launched with `-no-window -grpc <port>`) | gRPC `sendTouch`, `sendKey`, `sendMouse` | `adb devices` / emulator discovery files |
 
 Desktop apps are launched or kept behind Warp and never activated by the pane; a covered window keeps streaming, a minimized one does not (shown as such). Engines' headless modes (`godot --headless`, Unity `-batchmode -nographics`) render nothing, so they are not used for preview.
@@ -31,11 +31,11 @@ Evaluated in the spike as the long-term option: draw frames inside WarpUI. Scree
 
 ## Picture-in-picture and stacks
 
-A preview is a stream owned by `PreviewStreams` and addressed by `PreviewId`, independent of where it is shown, so it moves between a pane and the picture-in-picture window without restarting. The pane and the picture-in-picture window render the same stage (`app/src/preview/stage.rs`). The picture-in-picture window is a WarpUI view positioned in the workspace's stack, one per window, dragged with `Draggable` and snapped to the nearest corner on drop. A stack is a list of preview ids with one in front: the front one renders large, the others as live cards beside it at the Thumbnail rate.
+A preview is a stream owned by `PreviewStreams` and addressed by `PreviewId`, independent of where it is shown, so it moves between a pane and the picture-in-picture window without restarting. The pane and the picture-in-picture window render the same stage (`app/src/preview/stage.rs`). The picture-in-picture window is a WarpUI view positioned in the workspace's stack, one per window, dragged with `Draggable` and snapped to the nearest corner on drop. A stack is a list of preview ids with one in front: the front one renders large, the others as a pile of live cards over its bottom-right corner at the Thumbnail rate, fanned out into a row while hovered.
 
 ## Agent tools
 
-Added to the local MCP server beside `browser_*`, behind the same token (`warp_browser::agent::ToolChannels` routes each kind; either can be off), and to the `warp-browser` plugin's skill. The first release ships `preview_targets`, `preview_open`, `preview_screenshot` and `preview_look` (picture plus recent log); the rest arrive with Playing:
+Added to the local MCP server beside `browser_*`, behind the same token (`warp_browser::agent::ToolChannels` routes each kind; either can be off), and to the `warp-browser` plugin's skill. Shipped: everything below except launching apps and booting devices in `preview_open`, and `preview_describe`, which arrive with the simulator sources. Input tools take positions in pixels of the default-size picture (`SMALL_PICTURE_SIDE`), which every picture reply states; `PreviewCommand::input_events` turns them into fractions of the picture:
 
 | Tool | Does |
 | --- | --- |
@@ -43,7 +43,7 @@ Added to the local MCP server beside `browser_*`, behind the same token (`warp_b
 | `preview_open` | Shows a target in a preview pane, launching the app or booting the device when asked |
 | `preview_screenshot` | The current frame, a small JPEG by default (full size on request), with its coordinate space |
 | `preview_look` | The current frame and the recent log (page console and errors) in one call |
-| `preview_click`, `preview_drag`, `preview_scroll` | Pointer input in the target's coordinates (window points or device points); each reply includes a small frame after the action |
+| `preview_click`, `preview_drag`, `preview_scroll` | Pointer input in the picture's coordinates; each reply includes a small frame after the action |
 | `preview_type`, `preview_key` | Text, and named keys with modifiers |
 | `preview_describe` | Simulators: the accessibility tree (`baguette describe-ui`, `uiautomator dump`) |
 
@@ -63,9 +63,9 @@ Baguette: used from the path when present and version-checked. Otherwise the pan
 
 0. **Spike (macOS, run by hand):** a debug command that streams one chosen window into an `AVSampleBufferDisplayLayer` at the pane's rect and clicks through `computer_use`. Tried on Blender, the Godot editor and a Godot game, the Unity editor and a Unity player, and the Defold editor. Settles: do engines accept posted events; does the layer take ScreenCaptureKit buffers as delivered; is a WarpUI-drawn surface worth it.
 1. **Watching, first release:** `crates/warp_preview` (headless Chromium screencast and Chromium download; ScreenCaptureKit window capture; stubs elsewhere), `PreviewStreams`, `PreviewPane`/`PreviewView` with the start page and the floating capsule, picture-in-picture and cards, `FeatureFlag::PreviewPane`, palette entry, and the read-only agent tools with per-source approval.
-2. **Playing:** pointer (all buttons), drag, scroll and keys; the Watching / Playing switch; focus.
-3. **Agent tools for Playing:** click, drag, scroll, type, keys; Pause, Stop and the agent cursor.
-4. **iOS Simulator** through Baguette (`brew install baguette`, version-checked, never bundled), headless.
+2. **Playing (shipped):** `warp_preview::input` carries pointer and key input as fractions of the picture, so callers need not know a source's coordinates. `Stream::input` hands it to the source's thread: pages turn it into DevTools `Input.*` commands at the current viewport; windows turn it into `computer_use` actions in window pixels (the capture's content rect at its point-to-pixel scale), run by one actor per window on its own thread so a held button survives between events. The stage wraps a playing picture in an `EventHandler` (`app/src/preview/playing.rs` maps window points through the letterbox) and switches its stack to waterfall dispatch so clicks on the controls never reach the target. Keys are forwarded only while the view has focus. Windows need Accessibility, asked for when Playing is turned on. WarpUI has no right or middle drag, no right or middle release and no key release, so those buttons click and keys are pressed and released at once.
+3. **Agent tools for Playing (shipped):** click, drag, scroll, type and keys, approved like looking, each replying with a picture after a short settle. Pause, Stop and an agent cursor over the picture remain.
+4. **iOS Simulator (shipped)** through Baguette (`brew install baguette`, never bundled), headless: `baguette boot` without the Simulator window, so a device plays from any desktop and needs no Accessibility. The start page lists iOS simulators, and agents open one with `preview_open device=<name or UDID>`. Version checking and the in-pane install remain.
 5. **Android Emulator** through its gRPC API, headless.
 6. **Conveniences:** restore after restart; offer to open a project's engine when a terminal's directory holds a Unity, Godot, Defold or Blender project.
 

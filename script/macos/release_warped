@@ -13,8 +13,19 @@ set -eo pipefail
 
 VERSION="${1:?Usage: script/macos/release_warped <version> [aarch64|x86_64]}"
 ARCH="${2:-aarch64}"
+BUNDLE_ID="dev.bugthesystem.Warped"
 
 cd "$(git rev-parse --show-toplevel)"
+
+# A release-lto build from scratch writes about 25 GB under target/. Running out of space part way
+# fails half an hour in, so check first. WARPED_REQUIRED_GB overrides the estimate.
+REQUIRED_GB="${WARPED_REQUIRED_GB:-25}"
+FREE_GB=$(df -Pk . | awk 'NR == 2 { print int($4 / 1048576) }')
+if (( FREE_GB < REQUIRED_GB )); then
+  echo "Only ${FREE_GB} GB is free; building Warped needs about ${REQUIRED_GB} GB." >&2
+  echo "Free some space, for example with 'cargo clean --profile dev', and try again." >&2
+  exit 1
+fi
 
 FEATURES="browser_pane"
 # The preview pane lands separately; turn it on once its cargo feature exists.
@@ -34,6 +45,13 @@ PLIST="$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "Warped" "$PLIST"
 plutil -replace CFBundleDisplayName -string "Warped" "$PLIST" 2>/dev/null \
   || plutil -insert CFBundleDisplayName -string "Warped" "$PLIST"
+# Its own bundle ID keeps Warped's permissions, preferences and state apart from Warp OSS builds,
+# which macOS would otherwise treat as the same app.
+plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$PLIST"
+DOCK_TILE_PLIST="$APP/Contents/PlugIns/WarpDockTilePlugin.docktileplugin/Contents/Info.plist"
+if [[ -f "$DOCK_TILE_PLIST" ]]; then
+  plutil -replace MainAppBundleIdentifier -string "$BUNDLE_ID" "$DOCK_TILE_PLIST"
+fi
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
 plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
 

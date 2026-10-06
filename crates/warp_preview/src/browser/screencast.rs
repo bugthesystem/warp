@@ -69,6 +69,49 @@ fn profile_dir() -> PathBuf {
     ))
 }
 
+/// Ends the Chromium processes and removes the profiles of previews from Warp runs that are no
+/// longer alive. Chromium outlives a crashed Warp, so its processes and profiles would otherwise
+/// stay behind.
+pub(crate) fn clean_up_after_crashed_runs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("warp-preview-"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if owner == std::process::id() || process_is_alive(owner) {
+            continue;
+        }
+        let profile = entry.path();
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// Kills Chromium when the stream ends, however it ends.
 struct Browser(Child);
 
@@ -151,7 +194,7 @@ fn run(
     chromium: &Path,
     profile: &Path,
     url: &str,
-    viewport: (u32, u32),
+    mut viewport: (u32, u32),
     rate: Rate,
     control: &mpsc::Receiver<Control>,
     events: &async_channel::Sender<StreamEvent>,
@@ -176,8 +219,10 @@ fn run(
         cdp.call(domain, json!({}), session)?;
     }
     set_viewport(&mut cdp, viewport, session)?;
-    cdp.call("Page.navigate", json!({"url": url}), session)?;
+    // Started on the blank page, so a navigation that moves the page to another process carries
+    // the screencast with it instead of racing it.
     set_rate(&mut cdp, rate, session)?;
+    cdp.call("Page.navigate", json!({"url": url}), session)?;
 
     let mut title = String::new();
     let mut page_url = String::new();
@@ -189,7 +234,13 @@ fn run(
                     cdp.send("Page.navigate", json!({"url": url}), session)?;
                 }
                 Ok(Control::Resize(width, height)) => {
-                    set_viewport(&mut cdp, (width, height), session)?;
+                    viewport = (width, height);
+                    set_viewport(&mut cdp, viewport, session)?;
+                }
+                Ok(Control::Input(event)) => {
+                    for (method, params) in super::input::commands(&event, viewport) {
+                        cdp.send(method, params, session)?;
+                    }
                 }
                 Ok(Control::Stop) | Err(mpsc::TryRecvError::Disconnected) => {
                     let _ = cdp.send("Browser.close", json!({}), None);
@@ -289,6 +340,9 @@ fn set_viewport(
     .map(|_| ())
 }
 
+/// How long to wait before starting a screencast again on a page that was moving between processes.
+const DETACHED_RETRY_DELAY: Duration = Duration::from_millis(400);
+
 fn set_rate(cdp: &mut Cdp, rate: Rate, session: Option<&str>) -> Result<(), String> {
     let (max_side, every_nth_frame) = match rate {
         Rate::Full => (FULL_MAX_SIDE, 1),
@@ -299,18 +353,22 @@ fn set_rate(cdp: &mut Cdp, rate: Rate, session: Option<&str>) -> Result<(), Stri
         }
     };
     cdp.call("Page.stopScreencast", json!({}), session)?;
-    cdp.call(
-        "Page.startScreencast",
-        json!({
-            "format": "jpeg",
-            "quality": jpeg::QUALITY,
-            "maxWidth": max_side,
-            "maxHeight": max_side,
-            "everyNthFrame": every_nth_frame,
-        }),
-        session,
-    )
-    .map(|_| ())
+    let params = json!({
+        "format": "jpeg",
+        "quality": jpeg::QUALITY,
+        "maxWidth": max_side,
+        "maxHeight": max_side,
+        "everyNthFrame": every_nth_frame,
+    });
+    match cdp.call("Page.startScreencast", params.clone(), session) {
+        // A page moving to another process is briefly detached; it answers again moments later.
+        Err(err) if err.contains("Not attached") => {
+            std::thread::sleep(DETACHED_RETRY_DELAY);
+            cdp.call("Page.startScreencast", params, session)
+                .map(|_| ())
+        }
+        result => result.map(|_| ()),
+    }
 }
 
 /// A line for the preview's log from a console message, uncaught error or browser log entry.

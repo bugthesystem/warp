@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::input::InputEvent;
 use crate::{Error, Rate, Source, StreamEvent};
 
 /// What starting a stream needs beyond its source.
@@ -14,13 +15,14 @@ pub struct Environment {
 
 /// A message to a running stream's thread.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Control {
     SetRate(Rate),
     /// Loads a URL. Browser sources only.
     Navigate(String),
     /// Lays the page out at a new size, in points. Browser sources only.
     Resize(u32, u32),
+    Input(InputEvent),
     Stop,
 }
 
@@ -47,6 +49,11 @@ impl Stream {
     /// Lays a browser preview's page out at `width` by `height` points. Does nothing for windows.
     pub fn resize(&self, width: u32, height: u32) {
         let _ = self.control.send(Control::Resize(width, height));
+    }
+
+    /// Delivers pointer or keyboard input to the source.
+    pub fn input(&self, event: InputEvent) {
+        let _ = self.control.send(Control::Input(event));
     }
 }
 
@@ -79,6 +86,7 @@ pub fn start(
         Source::Window(window_source) => {
             crate::window::start_capture(window_source.clone(), rate, events)
         }
+        Source::Simulator(simulator) => crate::simulator::start(simulator.clone(), rate, events),
     }
     #[cfg(target_family = "wasm")]
     {

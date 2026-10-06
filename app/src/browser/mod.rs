@@ -12,7 +12,7 @@ mod view;
 use warp_browser::EditCommand;
 use warpui::actions::StandardAction;
 use warpui::keymap::FixedBinding;
-use warpui::{AppContext, View, id};
+use warpui::{AppContext, View, WindowId, id};
 
 use crate::features::FeatureFlag;
 
@@ -26,6 +26,16 @@ pub(crate) use local_servers::detect_local_servers;
 pub use registry::{BrowserViewRegistry, sync_webviews};
 pub(crate) use view::AgentApproval;
 pub use view::{BrowserView, BrowserViewAction, BrowserViewEvent};
+
+/// The Warp window agents' browser and preview tools act in: the active one, or while Warp is not
+/// frontmost (an agent in another app's terminal), the one the user used last.
+pub(crate) fn agent_window(ctx: &AppContext) -> Option<WindowId> {
+    let windows = ctx.windows();
+    windows
+        .active_window()
+        .or_else(|| windows.frontmost_window_id())
+        .or_else(|| windows.ordered_window_ids().first().copied())
+}
 
 /// Whether browser panes, and the browser tools agents get, are available.
 pub fn is_enabled() -> bool {

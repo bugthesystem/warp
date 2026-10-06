@@ -3,20 +3,19 @@ use std::time::Duration;
 
 use warp_browser::local_servers::LocalServer;
 use warp_core::ui::appearance::Appearance;
+use warp_preview::simulator::SimulatorEntry;
 use warp_preview::window::WindowEntry;
-use warp_preview::{Rate, Source, WindowSource};
+use warp_preview::{Rate, SimulatorSource, Source, WindowSource};
 use warpui::r#async::Timer;
 use warpui::clipboard::{ClipboardContent, ImageData};
-use warpui::elements::{
-    Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-};
+use warpui::elements::{ChildView, Container, Flex, MouseStateHandle, ParentElement};
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle,
 };
 
 use super::PreviewRegistry;
+use super::playing::{self, PlayingInput};
 use super::stage::{StageAction, StageMouseStates, StageOptions, render_stage};
 use super::streams::{ChromiumState, PreviewId, PreviewStreams};
 use crate::browser::AgentApproval;
@@ -25,14 +24,14 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::{self, HeaderContent};
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ui_components::icons::Icon;
+use crate::ui_components::start_page;
 use crate::workspace::WorkspaceAction;
 
 const DEFAULT_TITLE: &str = "Preview";
 const URL_FIELD_PLACEHOLDER: &str = "Enter a URL to preview, such as localhost:3000";
-const START_PAGE_WIDTH: f32 = 560.;
-const ROW_ICON_SIZE: f32 = 14.;
 const MAX_LOCAL_SERVERS: usize = 6;
 const MAX_WINDOWS: usize = 12;
+const MAX_SIMULATORS: usize = 6;
 const NOTICE_DURATION: Duration = Duration::from_secs(2);
 /// How long an agent's step shows on the badge after its last call.
 const AGENT_STEP_LINGER: Duration = Duration::from_secs(4);
@@ -47,6 +46,7 @@ pub enum PreviewViewAction {
     Stage(StageAction),
     OpenUrl(String),
     OpenWindow(WindowSource),
+    OpenSimulator(SimulatorSource),
     /// Leaves the start page for the stage, when there are previews to show.
     BackToStage,
     RefreshWindows,
@@ -65,6 +65,16 @@ enum WindowList {
     Loading,
     NeedsPermission,
     Listed(Vec<WindowEntry>),
+    Failed(String),
+}
+
+/// What the start page knows about iOS simulators.
+enum SimulatorList {
+    Unsupported,
+    Loading,
+    /// Baguette, which runs simulators without their window, is not installed.
+    NeedsBaguette,
+    Listed(Vec<SimulatorEntry>),
     Failed(String),
 }
 
@@ -90,6 +100,7 @@ pub struct PreviewView {
     stage_mouse_states: StageMouseStates,
     local_servers: Vec<LocalServer>,
     windows: WindowList,
+    simulators: SimulatorList,
     row_buttons: Vec<MouseStateHandle>,
     download_button: MouseStateHandle,
     permission_button: MouseStateHandle,
@@ -100,6 +111,8 @@ pub struct PreviewView {
     agent_step: Option<String>,
     agent_step_generation: u64,
     approval: Option<AppApproval>,
+    focused: bool,
+    playing_input: PlayingInput,
 }
 
 impl PreviewView {
@@ -144,7 +157,8 @@ impl PreviewView {
             stage_mouse_states: StageMouseStates::default(),
             local_servers: Vec::new(),
             windows: WindowList::Loading,
-            row_buttons: (0..MAX_LOCAL_SERVERS + MAX_WINDOWS)
+            simulators: SimulatorList::Loading,
+            row_buttons: (0..MAX_LOCAL_SERVERS + MAX_WINDOWS + MAX_SIMULATORS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             download_button: MouseStateHandle::default(),
@@ -156,6 +170,8 @@ impl PreviewView {
             agent_step: None,
             agent_step_generation: 0,
             approval: None,
+            focused: false,
+            playing_input: PlayingInput::default(),
         };
         view.stage_mouse_states.ensure_cards(view.cards.len());
         view.refresh_start_page(ctx);
@@ -310,6 +326,28 @@ impl PreviewView {
             },
         );
         self.refresh_windows(ctx);
+        self.refresh_simulators(ctx);
+    }
+
+    fn refresh_simulators(&mut self, ctx: &mut ViewContext<Self>) {
+        if !warp_preview::simulator::is_supported() {
+            self.simulators = SimulatorList::Unsupported;
+            return;
+        }
+        if warp_preview::simulator::find_baguette().is_none() {
+            self.simulators = SimulatorList::NeedsBaguette;
+            return;
+        }
+        ctx.spawn(
+            async { warp_preview::simulator::list_simulators() },
+            |me, simulators, ctx| {
+                me.simulators = match simulators {
+                    Ok(simulators) => SimulatorList::Listed(simulators),
+                    Err(err) => SimulatorList::Failed(err.to_string()),
+                };
+                ctx.notify();
+            },
+        );
     }
 
     fn refresh_windows(&mut self, ctx: &mut ViewContext<Self>) {
@@ -383,6 +421,7 @@ impl PreviewView {
         match action {
             StageAction::BringToFront(id) => {
                 self.front = Some(*id);
+                self.playing_input = PlayingInput::default();
                 self.sync_title(ctx);
                 ctx.notify();
             }
@@ -411,6 +450,21 @@ impl PreviewView {
                 ctx.notify();
             }
             StageAction::ResolveApproval(decision) => self.resolve_approval(*decision, ctx),
+            StageAction::SetPlaying(playing) => {
+                let Some(front) = self.front else {
+                    return;
+                };
+                self.playing_input = PlayingInput::default();
+                if let Err(notice) = playing::set_playing(front, *playing, ctx) {
+                    self.show_notice(notice, ctx);
+                }
+            }
+            StageAction::Input(input) => {
+                if let Some(front) = self.front {
+                    self.playing_input
+                        .forward(front, input, &self.position_id, ctx);
+                }
+            }
         }
     }
 
@@ -453,132 +507,248 @@ impl PreviewView {
     fn render_start_page(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let mut rows = self.row_buttons.iter();
+        let mut children = Vec::new();
 
-        let mut column = Flex::column().with_spacing(2.);
         if !self.cards.is_empty() {
-            column.add_child(
-                Container::new(link_button(
-                    "Back to previews",
+            children.push(
+                Container::new(start_page::link(
+                    "← Back to previews",
                     &self.back_button,
                     PreviewViewAction::BackToStage,
                     appearance,
                 ))
-                .with_margin_bottom(10.)
+                .with_margin_bottom(14.)
                 .finish(),
             );
         }
-        column.add_child(
-            Container::new(url_field(&self.url_editor, appearance))
-                .with_margin_bottom(4.)
+        children.push(start_page::heading(
+            "Preview",
+            "Watch a page, an app or a game live beside your terminal, then play it with your \
+             pointer and keys, or let an agent drive it.",
+            appearance,
+        ));
+        children.push(start_page::input_frame(
+            Icon::Globe,
+            ChildView::new(&self.url_editor).finish(),
+            appearance,
+        ));
+        children.push(
+            Container::new(self.render_chromium_status(appearance, app))
+                .with_margin_top(6.)
                 .finish(),
         );
-        column.add_child(self.render_chromium_status(appearance, app));
 
         if !self.local_servers.is_empty() {
-            column.add_child(section_heading(
-                Icon::Terminal,
-                "Running on this machine",
-                appearance,
-            ));
-            for (server, mouse_state) in self
+            let server_rows = self
                 .local_servers
                 .iter()
                 .take(MAX_LOCAL_SERVERS)
                 .zip(rows.by_ref())
-            {
-                column.add_child(start_row(
-                    Icon::Globe,
-                    &warp_browser::display_url(&server.url()),
-                    Some(&server.process),
-                    mouse_state,
-                    PreviewViewAction::OpenUrl(server.url()),
-                    appearance,
-                ));
-            }
-        }
-
-        column.add_child(section_heading(Icon::Laptop, "App windows", appearance));
-        match &self.windows {
-            WindowList::Unsupported => column.add_child(muted_text(
-                "Previewing other apps' windows is available on macOS.",
-                appearance,
-            )),
-            WindowList::Loading => column.add_child(muted_text("Looking for windows…", appearance)),
-            WindowList::NeedsPermission => {
-                column.add_child(muted_text(
-                    "Warp needs the Screen Recording permission to show other apps' windows, \
-                     such as a game engine or a simulator. Nothing is recorded while no preview \
-                     is open.",
-                    appearance,
-                ));
-                column.add_child(
-                    Flex::row()
-                        .with_spacing(8.)
-                        .with_child(link_button(
-                            "Allow Screen Recording",
-                            &self.permission_button,
-                            PreviewViewAction::Stage(StageAction::GrantScreenRecording),
-                            appearance,
-                        ))
-                        .with_child(link_button(
-                            "Open System Settings",
-                            &self.settings_button,
-                            PreviewViewAction::OpenScreenRecordingSettings,
-                            appearance,
-                        ))
-                        .finish(),
-                );
-            }
-            WindowList::Failed(reason) => {
-                column.add_child(muted_text(&format!("{reason}."), appearance));
-            }
-            WindowList::Listed(windows) if windows.is_empty() => {
-                column.add_child(muted_text("No other app windows are open.", appearance));
-            }
-            WindowList::Listed(windows) => {
-                for (window, mouse_state) in windows.iter().take(MAX_WINDOWS).zip(rows.by_ref()) {
-                    let detail = match (window.on_screen, window.source.title.is_empty()) {
-                        (false, _) => Some("minimized".to_owned()),
-                        (true, true) => None,
-                        (true, false) => Some(window.source.title.clone()),
-                    };
-                    column.add_child(start_row(
-                        Icon::Laptop,
-                        &window.source.app_name,
-                        detail.as_deref(),
+                .map(|(server, mouse_state)| {
+                    start_page::row(
+                        start_page::RowContent {
+                            icon: Icon::Globe,
+                            title: &warp_browser::display_url(&server.url()),
+                            detail: Some(&server.process),
+                            hover_hint: "Preview",
+                        },
                         mouse_state,
-                        PreviewViewAction::OpenWindow(window.source.clone()),
+                        PreviewViewAction::OpenUrl(server.url()),
                         appearance,
-                    ));
-                }
-            }
+                    )
+                })
+                .collect();
+            children.push(start_page::section(
+                Icon::Terminal,
+                "Running on this machine",
+                server_rows,
+                None,
+                appearance,
+            ));
         }
 
-        column.add_child(section_heading(Icon::AgentMode, "Agents", appearance));
-        column.add_child(muted_text(
-            "Agents in Warp terminals can list, open and look at previews with the preview_* \
-             tools. Edit scenes through the engine's own MCP server.",
-            appearance,
-        ));
-        column.add_child(link_button(
-            "Set up Claude Code tools",
-            &self.agent_setup_button,
-            PreviewViewAction::SetUpAgentTools,
+        let (window_rows, window_note) = match &self.windows {
+            WindowList::Unsupported => (
+                Vec::new(),
+                Some(start_page::note(
+                    "Previewing other apps' windows is available on macOS.",
+                    appearance,
+                )),
+            ),
+            WindowList::Loading => (
+                Vec::new(),
+                Some(start_page::note("Looking for windows…", appearance)),
+            ),
+            WindowList::NeedsPermission => (
+                Vec::new(),
+                Some(
+                    Flex::column()
+                        .with_child(start_page::note(
+                            "Warp needs the Screen Recording permission to show other apps' \
+                             windows, such as a game engine or a simulator. Nothing is recorded \
+                             while no preview is open.",
+                            appearance,
+                        ))
+                        .with_child(
+                            Flex::row()
+                                .with_spacing(4.)
+                                .with_child(start_page::link(
+                                    "Allow Screen Recording",
+                                    &self.permission_button,
+                                    PreviewViewAction::Stage(StageAction::GrantScreenRecording),
+                                    appearance,
+                                ))
+                                .with_child(start_page::link(
+                                    "Open System Settings",
+                                    &self.settings_button,
+                                    PreviewViewAction::OpenScreenRecordingSettings,
+                                    appearance,
+                                ))
+                                .finish(),
+                        )
+                        .finish(),
+                ),
+            ),
+            WindowList::Failed(reason) => (
+                Vec::new(),
+                Some(start_page::note(&format!("{reason}."), appearance)),
+            ),
+            WindowList::Listed(windows) if windows.is_empty() => (
+                Vec::new(),
+                Some(start_page::note(
+                    "No other app windows are open.",
+                    appearance,
+                )),
+            ),
+            WindowList::Listed(windows) => (
+                windows
+                    .iter()
+                    .take(MAX_WINDOWS)
+                    .zip(rows.by_ref())
+                    .map(|(window, mouse_state)| {
+                        let detail = match (window.on_screen, window.source.title.is_empty()) {
+                            (false, _) => Some("minimized".to_owned()),
+                            (true, true) => None,
+                            (true, false) => Some(window.source.title.clone()),
+                        };
+                        start_page::row(
+                            start_page::RowContent {
+                                icon: Icon::Laptop,
+                                title: &window.source.app_name,
+                                detail: detail.as_deref(),
+                                hover_hint: "Preview",
+                            },
+                            mouse_state,
+                            PreviewViewAction::OpenWindow(window.source.clone()),
+                            appearance,
+                        )
+                    })
+                    .collect(),
+                None,
+            ),
+        };
+        children.push(start_page::section(
+            Icon::Laptop,
+            "App windows",
+            window_rows,
+            window_note,
             appearance,
         ));
 
-        Align::new(
-            Container::new(
-                ConstrainedBox::new(column.finish())
-                    .with_max_width(START_PAGE_WIDTH)
+        if let Some(section) = self.render_simulators(rows.by_ref(), appearance) {
+            children.push(section);
+        }
+
+        children.push(start_page::section(
+            Icon::AgentMode,
+            "Agents",
+            Vec::new(),
+            Some(
+                Flex::column()
+                    .with_child(start_page::note(
+                        "Agents in Warp terminals list, open, look at and drive previews with \
+                         the preview_* tools, asking you before they see an app.",
+                        appearance,
+                    ))
+                    .with_child(start_page::link(
+                        "Set up Claude Code tools",
+                        &self.agent_setup_button,
+                        PreviewViewAction::SetUpAgentTools,
+                        appearance,
+                    ))
                     .finish(),
-            )
-            .with_margin_top(32.)
-            .with_horizontal_padding(16.)
-            .finish(),
-        )
-        .top_center()
-        .finish()
+            ),
+            appearance,
+        ));
+
+        start_page::page(children)
+    }
+
+    /// The iOS simulators section, or `None` where simulators can't be previewed.
+    fn render_simulators<'a>(
+        &self,
+        rows: impl Iterator<Item = &'a MouseStateHandle>,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let (simulator_rows, note) = match &self.simulators {
+            SimulatorList::Unsupported => return None,
+            SimulatorList::Loading => (
+                Vec::new(),
+                Some(start_page::note("Looking for simulators…", appearance)),
+            ),
+            SimulatorList::NeedsBaguette => (
+                Vec::new(),
+                Some(start_page::note(
+                    "Simulators run here without their own window through Baguette. Install it \
+                     with `brew install baguette`, then open this page again.",
+                    appearance,
+                )),
+            ),
+            SimulatorList::Failed(reason) => (
+                Vec::new(),
+                Some(start_page::note(&format!("{reason}."), appearance)),
+            ),
+            SimulatorList::Listed(simulators) if simulators.is_empty() => (
+                Vec::new(),
+                Some(start_page::note(
+                    "No iOS simulators are installed. Add one in Xcode.",
+                    appearance,
+                )),
+            ),
+            SimulatorList::Listed(simulators) => (
+                simulators
+                    .iter()
+                    .take(MAX_SIMULATORS)
+                    .zip(rows)
+                    .map(|(simulator, mouse_state)| {
+                        let detail = if simulator.booted {
+                            format!("{} · running", simulator.runtime)
+                        } else {
+                            simulator.runtime.clone()
+                        };
+                        start_page::row(
+                            start_page::RowContent {
+                                icon: Icon::Phone,
+                                title: &simulator.source.name,
+                                detail: Some(&detail),
+                                hover_hint: "Preview",
+                            },
+                            mouse_state,
+                            PreviewViewAction::OpenSimulator(simulator.source.clone()),
+                            appearance,
+                        )
+                    })
+                    .collect(),
+                None,
+            ),
+        };
+        Some(start_page::section(
+            Icon::Phone,
+            "iOS simulators",
+            simulator_rows,
+            note,
+            appearance,
+        ))
     }
 
     /// Which browser page previews use, or how to get one.
@@ -588,12 +758,12 @@ impl PreviewView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         match PreviewStreams::as_ref(app).chromium() {
-            ChromiumState::Looking => muted_text("Looking for a browser…", appearance),
-            ChromiumState::Found(path) => muted_text(
+            ChromiumState::Looking => start_page::note("Looking for a browser…", appearance),
+            ChromiumState::Found(path) => start_page::note(
                 &format!("Pages run headless in {}.", browser_name(path)),
                 appearance,
             ),
-            ChromiumState::Downloading => muted_text("Downloading Chromium…", appearance),
+            ChromiumState::Downloading => start_page::note("Downloading Chromium…", appearance),
             ChromiumState::Missing | ChromiumState::Failed(_) => {
                 let text = match PreviewStreams::as_ref(app).chromium() {
                     ChromiumState::Failed(reason) => format!("{reason}."),
@@ -602,9 +772,8 @@ impl PreviewView {
                         .to_owned(),
                 };
                 Flex::column()
-                    .with_spacing(6.)
-                    .with_child(muted_text(&text, appearance))
-                    .with_child(link_button(
+                    .with_child(start_page::note(&text, appearance))
+                    .with_child(start_page::link(
                         "Download for me",
                         &self.download_button,
                         PreviewViewAction::Stage(StageAction::DownloadChromium),
@@ -630,146 +799,6 @@ fn browser_name(path: &std::path::Path) -> String {
     } else {
         "Chromium".to_owned()
     }
-}
-
-fn url_field(editor: &ViewHandle<EditorView>, appearance: &Appearance) -> Box<dyn Element> {
-    Container::new(ChildView::new(editor).finish())
-        .with_horizontal_padding(10.)
-        .with_vertical_padding(7.)
-        .with_background(appearance.theme().surface_2())
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .finish()
-}
-
-fn section_heading(icon: Icon, heading: &str, appearance: &Appearance) -> Box<dyn Element> {
-    let color = appearance.theme().nonactive_ui_text_color();
-    Container::new(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.)
-            .with_child(
-                ConstrainedBox::new(icon.to_warpui_icon(color).finish())
-                    .with_width(ROW_ICON_SIZE)
-                    .with_height(ROW_ICON_SIZE)
-                    .finish(),
-            )
-            .with_child(
-                Text::new_inline(
-                    heading.to_owned(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(color.into())
-                .finish(),
-            )
-            .finish(),
-    )
-    .with_margin_top(18.)
-    .with_margin_bottom(4.)
-    .finish()
-}
-
-fn muted_text(text: &str, appearance: &Appearance) -> Box<dyn Element> {
-    Container::new(
-        Text::new(
-            text.to_owned(),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(appearance.theme().nonactive_ui_text_color().into())
-        .finish(),
-    )
-    .with_vertical_padding(4.)
-    .finish()
-}
-
-/// A clickable row on the start page.
-fn start_row(
-    icon: Icon,
-    title: &str,
-    detail: Option<&str>,
-    mouse_state: &MouseStateHandle,
-    action: PreviewViewAction,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme().clone();
-    let font_family = appearance.ui_font_family();
-    let font_size = appearance.ui_font_size();
-    let title = title.to_owned();
-    let detail = detail.map(str::to_owned);
-    Hoverable::new(mouse_state.clone(), move |state| {
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(10.)
-            .with_child(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(theme.nonactive_ui_text_color())
-                        .finish(),
-                )
-                .with_width(ROW_ICON_SIZE)
-                .with_height(ROW_ICON_SIZE)
-                .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(title.clone(), font_family, font_size)
-                        .with_color(theme.active_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        if let Some(detail) = &detail {
-            row.add_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new_inline(detail.clone(), font_family, font_size)
-                        .with_color(theme.nonactive_ui_text_color().into())
-                        .finish(),
-                )
-                .finish(),
-            );
-        }
-        let mut container = Container::new(row.finish())
-            .with_horizontal_padding(10.)
-            .with_vertical_padding(6.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)));
-        if state.is_hovered() {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-    .finish()
-}
-
-/// A text button in the accent color.
-fn link_button(
-    label: &str,
-    mouse_state: &MouseStateHandle,
-    action: PreviewViewAction,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme().clone();
-    let font_family = appearance.ui_font_family();
-    let font_size = appearance.ui_font_size();
-    let label = label.to_owned();
-    Hoverable::new(mouse_state.clone(), move |state| {
-        let mut container = Container::new(
-            Text::new_inline(label.clone(), font_family, font_size)
-                .with_color(theme.accent().into())
-                .finish(),
-        )
-        .with_horizontal_padding(10.)
-        .with_vertical_padding(4.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)));
-        if state.is_hovered() {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-    .finish()
 }
 
 pub(super) fn jpeg_clipboard_content(data: Vec<u8>) -> ClipboardContent {
@@ -805,6 +834,20 @@ impl View for PreviewView {
         "PreviewView"
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            self.focused = true;
+            ctx.notify();
+        }
+    }
+
+    fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        if blur_ctx.is_self_blurred() {
+            self.focused = false;
+            ctx.notify();
+        }
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let front = match self.front {
             Some(front) if !self.show_start_page => front,
@@ -817,7 +860,7 @@ impl View for PreviewView {
             StageOptions {
                 position_id: &self.position_id,
                 in_picture_in_picture: false,
-                show_cards: true,
+                focused: self.focused,
                 approval: self
                     .approval
                     .as_ref()
@@ -845,6 +888,9 @@ impl TypedActionView for PreviewView {
             ),
             PreviewViewAction::OpenWindow(window) => {
                 self.open_source(Source::Window(window.clone()), ctx)
+            }
+            PreviewViewAction::OpenSimulator(simulator) => {
+                self.open_source(Source::Simulator(simulator.clone()), ctx)
             }
             PreviewViewAction::BackToStage => {
                 if !self.cards.is_empty() {

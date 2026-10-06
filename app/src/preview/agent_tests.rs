@@ -1,5 +1,6 @@
-use warp_preview::WindowSource;
+use warp_preview::simulator::SimulatorEntry;
 use warp_preview::window::WindowEntry;
+use warp_preview::{SimulatorSource, WindowSource};
 
 use super::{PreviewStatus, format_targets, status_note};
 
@@ -27,18 +28,32 @@ fn lists_previews_windows_and_how_to_open_a_url() {
             window(42, "Godot", "Main.tscn", true),
             window(43, "Simulator", "", false),
         ]),
+        Ok(vec![SimulatorEntry {
+            source: SimulatorSource {
+                udid: "ABC".to_owned(),
+                name: "iPhone 17 Pro".to_owned(),
+            },
+            runtime: "iOS 26.5".to_owned(),
+            booted: true,
+        }]),
     );
     assert!(text.starts_with("Open previews:\n- preview 1: http://localhost:3000/\n"));
     assert!(text.contains("- window 42: Godot \"Main.tscn\" (1280x720)\n"));
     assert!(text.contains("- window 43: Simulator (1280x720, minimized)\n"));
+    assert!(text.contains("- iPhone 17 Pro (iOS 26.5, booted), udid ABC\n"));
     assert!(text.ends_with("preview_open url=<url>."));
 }
 
 #[test]
 fn leaves_windows_out_where_they_are_unsupported() {
-    let text = format_targets(&[], Err(warp_preview::Error::Unsupported));
+    let text = format_targets(
+        &[],
+        Err(warp_preview::Error::Unsupported),
+        Err(warp_preview::Error::Unsupported),
+    );
     assert!(text.starts_with("No previews are open.\n"));
     assert!(!text.contains("App windows"));
+    assert!(!text.contains("simulators"));
 }
 
 #[test]

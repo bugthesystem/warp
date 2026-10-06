@@ -1,5 +1,5 @@
 //! Runs agents' preview tool calls. Calls arrive from the MCP endpoint the browser tools are
-//! served on, and only watch: agents list, open and look at previews.
+//! served on: agents list, open and look at previews, and click, drag, scroll and type in them.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
 use warp_preview::agent::{OpenTarget, PreviewCommand, PreviewOutput, PreviewToolRequest};
+use warp_preview::simulator::SimulatorEntry;
 use warp_preview::window::WindowEntry;
 use warp_preview::{Source, WindowSource};
 use warpui::r#async::Timer;
@@ -25,10 +26,19 @@ type Reply = async_channel::Sender<ToolResult>;
 
 const APPROVED_SOURCES_FILE_NAME: &str = "preview-agent-sources.json";
 
+/// Simulators are approved as the Simulator app, so allowing its window allows its devices too.
+const SIMULATOR_APP_ID: &str = "com.apple.iphonesimulator";
+
 /// How long `preview_open` waits for a first picture before replying without one.
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(8);
 const FIRST_FRAME_POLL: Duration = Duration::from_millis(150);
 
+/// How long an input tool waits after acting before it replies with a picture of the result.
+const ACTION_SETTLE: Duration = Duration::from_millis(350);
+
+const NEEDS_ACCESSIBILITY: &str = "Warp needs the Accessibility permission to send input to other \
+apps' windows. Ask the user to allow Warp in System Settings > Privacy & Security > Accessibility, \
+then try again.";
 /// Runs agents' preview tool calls on the main thread. Opening or looking at a page that is not
 /// local, or at another app's window, waits until the user allows it where the preview shows.
 pub struct PreviewAgent {
@@ -59,7 +69,8 @@ enum Holder {
 /// A call to run once approved.
 enum ApprovedCall {
     Open(Source, WeakViewHandle<PreviewView>),
-    Look(PreviewCommand, PreviewId),
+    /// A call that looks at or acts on an open preview.
+    Use(PreviewCommand, PreviewId),
 }
 
 /// What a call needs before it runs.
@@ -107,13 +118,22 @@ impl PreviewAgent {
         ctx.notify();
     }
 
-    /// Applies the user's decision on `key` to every call waiting on it.
+    /// Applies the user's decision on `key` to every call waiting on it, once the caller returns.
     pub fn resolve_approval(
         &mut self,
         key: &str,
         decision: AgentApproval,
         ctx: &mut ModelContext<Self>,
     ) {
+        // The decision arrives from the action handler of the view showing the prompt, and that
+        // view can't be reached until its handler returns; opening a preview adds to it.
+        let key = key.to_owned();
+        ctx.spawn(async {}, move |me, _, ctx| {
+            me.apply_approval(&key, decision, ctx)
+        });
+    }
+
+    fn apply_approval(&mut self, key: &str, decision: AgentApproval, ctx: &mut ModelContext<Self>) {
         if decision == AgentApproval::Always {
             self.approved.approve(key.to_owned());
             if let Some(path) = &self.approved_path
@@ -143,9 +163,9 @@ impl PreviewAgent {
                                 .try_send(Err("The preview pane closed".to_owned()));
                         }
                     },
-                    ApprovedCall::Look(command, id) => {
+                    ApprovedCall::Use(command, id) => {
                         self.allowed_previews.insert(id);
-                        let _ = pending.reply.try_send(self.look(&command, id, ctx));
+                        self.use_preview(command, id, pending.reply, ctx);
                     }
                 },
             }
@@ -158,12 +178,43 @@ impl PreviewAgent {
             PreviewCommand::Targets => {
                 let previews = list_previews(ctx);
                 ctx.spawn(
-                    async { warp_preview::window::list_windows() },
-                    move |_, windows, _| {
+                    async {
+                        (
+                            warp_preview::window::list_windows(),
+                            warp_preview::simulator::list_simulators(),
+                        )
+                    },
+                    move |_, (windows, simulators), _| {
                         let _ = reply.try_send(Ok(PreviewOutput {
-                            text: format_targets(&previews, windows),
+                            text: format_targets(&previews, windows, simulators),
                             jpeg: None,
                         }));
+                    },
+                );
+            }
+            PreviewCommand::Open(OpenTarget::Device(device)) => {
+                ctx.spawn(
+                    async { warp_preview::simulator::list_simulators() },
+                    move |me, simulators, ctx| {
+                        let simulators = match simulators {
+                            Ok(simulators) => simulators,
+                            Err(err) => {
+                                let _ = reply.try_send(Err(err.to_string()));
+                                return;
+                            }
+                        };
+                        let Some(simulator) = simulators.into_iter().find(|entry| {
+                            entry.source.udid.eq_ignore_ascii_case(&device)
+                                || entry.source.name.eq_ignore_ascii_case(&device)
+                        }) else {
+                            let _ = reply.try_send(Err(format!(
+                                "No simulator named {device}. Call preview_targets for the list."
+                            )));
+                            return;
+                        };
+                        let source = Source::Simulator(simulator.source);
+                        let access = me.source_access(&source);
+                        me.open_with_access(source, access, reply, ctx);
                     },
                 );
             }
@@ -202,9 +253,15 @@ impl PreviewAgent {
                     },
                 );
             }
-            PreviewCommand::Screenshot { preview, .. } | PreviewCommand::Look { preview, .. } => {
+            PreviewCommand::Screenshot { .. }
+            | PreviewCommand::Look { .. }
+            | PreviewCommand::Click { .. }
+            | PreviewCommand::Drag { .. }
+            | PreviewCommand::Scroll { .. }
+            | PreviewCommand::Type { .. }
+            | PreviewCommand::Key { .. } => {
                 let streams = PreviewStreams::as_ref(ctx);
-                let id = match preview {
+                let id = match command.preview() {
                     Some(id) => Some(PreviewId(id)),
                     None => streams.last_used(),
                 };
@@ -223,12 +280,7 @@ impl PreviewAgent {
                     self.source_access(&source)
                 };
                 match access {
-                    Access::Allowed => {
-                        if let Some(step) = command.step() {
-                            record_step(id, step, ctx);
-                        }
-                        let _ = reply.try_send(self.look(&command, id, ctx));
-                    }
+                    Access::Allowed => self.use_preview(command, id, reply, ctx),
                     Access::NeedsApproval { key, name } => match holder_of(id, ctx) {
                         Some(holder) => {
                             holder.request_approval(
@@ -241,7 +293,7 @@ impl PreviewAgent {
                             self.pending.push(PendingApproval {
                                 key,
                                 holder,
-                                call: ApprovedCall::Look(command, id),
+                                call: ApprovedCall::Use(command, id),
                                 reply,
                             });
                         }
@@ -267,17 +319,22 @@ impl PreviewAgent {
                 _ => Access::Allowed,
             },
             Source::Window(window) => self.window_access(window),
+            Source::Simulator(_) => self.app_access(SIMULATOR_APP_ID, "Simulator"),
         }
     }
 
     fn window_access(&self, window: &WindowSource) -> Access {
-        let key = format!("app:{}", window.app_id);
+        self.app_access(&window.app_id, &window.app_name)
+    }
+
+    fn app_access(&self, app_id: &str, app_name: &str) -> Access {
+        let key = format!("app:{app_id}");
         if self.approved.allows(&key) {
             Access::Allowed
         } else {
             Access::NeedsApproval {
                 key,
-                name: window.app_name.clone(),
+                name: app_name.to_owned(),
             }
         }
     }
@@ -330,6 +387,7 @@ impl PreviewAgent {
         let step = PreviewCommand::Open(match &source {
             Source::Browser { url } => OpenTarget::Url(url.clone()),
             Source::Window(window) => OpenTarget::Window(window.window_id),
+            Source::Simulator(simulator) => OpenTarget::Device(simulator.name.clone()),
         })
         .step();
         let label = source.label();
@@ -349,6 +407,89 @@ impl PreviewAgent {
         });
         let intro = format!("Opened {label} as preview {id}.");
         reply_with_first_frame(id, intro, reply, FIRST_FRAME_TIMEOUT, ctx);
+    }
+
+    /// Runs a call that looks at or acts on preview `id`, which the agent may see.
+    fn use_preview(
+        &mut self,
+        command: PreviewCommand,
+        id: PreviewId,
+        reply: Reply,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(step) = command.step() {
+            record_step(id, step, ctx);
+        }
+        match self.act(&command, id, ctx) {
+            None => {
+                let _ = reply.try_send(self.look(&command, id, ctx));
+            }
+            Some(Err(message)) => {
+                let _ = reply.try_send(Err(message));
+            }
+            Some(Ok(())) => {
+                ctx.spawn(Timer::after(ACTION_SETTLE), move |me, _, ctx| {
+                    let result = me
+                        .look(
+                            &PreviewCommand::Screenshot {
+                                preview: Some(id.0),
+                                full_size: false,
+                            },
+                            id,
+                            ctx,
+                        )
+                        .map(|mut output| {
+                            output.text = format!("Done. {}", output.text);
+                            output
+                        });
+                    let _ = reply.try_send(result);
+                });
+            }
+        }
+    }
+
+    /// Delivers the input of an acting command to preview `id`. `None` for commands that only
+    /// look.
+    fn act(
+        &self,
+        command: &PreviewCommand,
+        id: PreviewId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<Result<(), String>> {
+        if !command.acts() {
+            return None;
+        }
+        let streams = PreviewStreams::as_ref(ctx);
+        let Some(preview) = streams.get(id) else {
+            return Some(Err(format!("Preview {id} closed")));
+        };
+        let Some(picture) = agent_picture_size(preview.frame_size) else {
+            return Some(Err(format!(
+                "Preview {id} has no picture yet; call preview_look shortly."
+            )));
+        };
+        let events = match command.input_events(picture)? {
+            Ok(events) => events,
+            Err(message) => return Some(Err(message)),
+        };
+        if let Source::Window(window) = &preview.source {
+            if !warp_preview::window::has_input_permission() {
+                return Some(Err(NEEDS_ACCESSIBILITY.to_owned()));
+            }
+            if !warp_preview::window::is_on_current_desktop(window.window_id) {
+                return Some(Err(format!(
+                    "{}'s window is minimized or on another desktop, so it can't take input. Ask \
+                     the user to move it to this desktop; it can stay behind Warp.",
+                    window.app_name
+                )));
+            }
+        }
+        for event in events {
+            if !streams.send_input(id, event) {
+                return Some(Err(format!("Preview {id} is not running")));
+            }
+        }
+        Some(Ok(()))
     }
 
     /// The picture, and for `preview_look` the recent log, of preview `id`.
@@ -381,8 +522,12 @@ impl PreviewAgent {
         if let Some(status) = status_note(&preview.status) {
             text.push_str(&format!(" ({status})"));
         }
-        if jpeg.is_none() {
-            text.push_str(". No picture yet.");
+        match (jpeg.is_some(), agent_picture_size(preview.frame_size)) {
+            (true, Some((width, height))) => text.push_str(&format!(
+                ". Input tools take x and y in a {width}x{height} picture, the size preview_look \
+                 returns."
+            )),
+            _ => text.push_str(". No picture yet."),
         }
         if let PreviewCommand::Look { lines, .. } = command {
             let log: Vec<&String> = preview.recent_log(*lines).collect();
@@ -490,12 +635,10 @@ fn record_step(id: PreviewId, step: String, ctx: &mut ModelContext<PreviewAgent>
     }
 }
 
-/// The preview pane in the active window, opening one if there is none.
+/// The preview pane in the window agents act in, opening one if there is none.
 fn preview_pane(ctx: &mut ModelContext<PreviewAgent>) -> Result<ViewHandle<PreviewView>, String> {
-    let window_id = ctx
-        .windows()
-        .active_window()
-        .ok_or_else(|| "No Warp window is open".to_owned())?;
+    let window_id =
+        crate::browser::agent_window(ctx).ok_or_else(|| "No Warp window is open".to_owned())?;
     let in_window = |ctx: &ModelContext<PreviewAgent>| {
         PreviewRegistry::as_ref(ctx)
             .views(ctx)
@@ -557,6 +700,14 @@ fn reply_with_first_frame(
     });
 }
 
+/// The size of the picture tools return by default for a frame of `frame_size`, which input
+/// tools' coordinates are in.
+fn agent_picture_size(frame_size: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    frame_size.map(|size| {
+        warp_preview::geometry::scale_within(size, warp_preview::agent::SMALL_PICTURE_SIDE)
+    })
+}
+
 /// `jpeg` shrunk to the size tools return by default.
 fn small_picture(jpeg: &[u8]) -> Option<Vec<u8>> {
     #[cfg(not(target_family = "wasm"))]
@@ -586,6 +737,7 @@ fn list_previews(ctx: &ModelContext<PreviewAgent>) -> Vec<String> {
 fn format_targets(
     previews: &[String],
     windows: Result<Vec<WindowEntry>, warp_preview::Error>,
+    simulators: Result<Vec<SimulatorEntry>, warp_preview::Error>,
 ) -> String {
     let mut text = String::new();
     if previews.is_empty() {
@@ -616,6 +768,23 @@ fn format_targets(
         }
         Err(warp_preview::Error::Unsupported) => {}
         Err(err) => text.push_str(&format!("\nApp windows are unavailable: {err}.\n")),
+    }
+    match simulators {
+        Ok(simulators) if !simulators.is_empty() => {
+            text.push_str(
+                "\niOS simulators (open one with preview_open device=<name>; it runs without its \
+                 own window):\n",
+            );
+            for simulator in simulators {
+                let state = if simulator.booted { ", booted" } else { "" };
+                text.push_str(&format!(
+                    "- {} ({}{state}), udid {}\n",
+                    simulator.source.name, simulator.runtime, simulator.source.udid
+                ));
+            }
+        }
+        Ok(_) | Err(warp_preview::Error::Unsupported) => {}
+        Err(err) => text.push_str(&format!("\nSimulators are unavailable: {err}.\n")),
     }
     text.push_str(
         "\nAny URL, such as a local dev server, can be opened with preview_open url=<url>.",

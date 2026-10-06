@@ -3,6 +3,7 @@
 
 mod agent;
 mod pip;
+mod playing;
 mod stage;
 mod streams;
 mod view;
