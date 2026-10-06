@@ -16,6 +16,9 @@ ARCH="${2:-aarch64}"
 
 cd "$(git rev-parse --show-toplevel)"
 
+# A release build never reuses incremental caches, which would only take disk space.
+export CARGO_INCREMENTAL=0
+
 FEATURES="browser_pane"
 # The preview pane lands separately; turn it on once its cargo feature exists.
 if grep -q '^preview_pane = ' app/Cargo.toml; then
@@ -46,3 +49,6 @@ ZIP="$OUT_DIR/Warped-$VERSION-$ARCH.zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "Built $ZIP"
 shasum -a 256 "$ZIP"
+
+# The zip holds the release; the unzipped bundles take a few GB and are rebuilt every time.
+rm -rf "$APP" "target/$ARCH-apple-darwin/release-lto/bundle"
