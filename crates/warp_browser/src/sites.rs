@@ -7,12 +7,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::url_input::is_local_host;
 
+/// What agents ask approval for before reading `file:` URLs, since those expose the user's files.
+pub const LOCAL_FILES_SITE: &str = "local files";
+
 /// The site an agent needs the user's approval for before it acts on, or opens, `url`. `None`
-/// when no approval is needed: local addresses, and pages that are not websites.
+/// when no approval is needed: local addresses, and pages that are neither websites nor files.
 pub fn site_requiring_approval(url: &str) -> Option<String> {
     let url = url::Url::parse(url).ok()?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return None;
+    match url.scheme() {
+        "http" | "https" => {}
+        "file" => return Some(LOCAL_FILES_SITE.to_owned()),
+        _ => return None,
     }
     let host = url.host_str()?;
     if is_local_host(host) {

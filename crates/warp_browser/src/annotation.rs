@@ -33,6 +33,15 @@ impl PageAnnotation {
     }
 }
 
+/// Removes control characters other than newlines and tabs from page-supplied text before it is
+/// pasted into a terminal, where an escape sequence such as `ESC [201~` could end bracketed paste
+/// early and let the rest run as typed input.
+pub fn strip_control_characters(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
+
 /// Formats notes as text for an agent, or for pasting into one.
 pub fn format_annotations(annotations: &[PageAnnotation]) -> String {
     if annotations.is_empty() {

@@ -1,4 +1,4 @@
-use super::{ApprovedSites, site_requiring_approval};
+use super::{ApprovedSites, LOCAL_FILES_SITE, site_requiring_approval};
 
 #[test]
 fn local_addresses_need_no_approval() {
@@ -10,8 +10,15 @@ fn local_addresses_need_no_approval() {
 #[test]
 fn pages_that_are_not_websites_need_no_approval() {
     assert_eq!(site_requiring_approval("about:blank"), None);
-    assert_eq!(site_requiring_approval("file:///tmp/index.html"), None);
     assert_eq!(site_requiring_approval(""), None);
+}
+
+#[test]
+fn local_files_need_approval() {
+    assert_eq!(
+        site_requiring_approval("file:///Users/me/.ssh/id_rsa"),
+        Some(LOCAL_FILES_SITE.to_owned())
+    );
 }
 
 #[test]

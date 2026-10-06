@@ -177,7 +177,7 @@ impl BrowserAgent {
         }
         for pending in std::mem::take(&mut self.pending) {
             if let Some(view) = pending.view.upgrade(ctx) {
-                view.update(ctx, |view, ctx| view.clear_agent_approval(ctx));
+                view.update(ctx, |view, ctx| view.clear_agent_approval(&pending.site, ctx));
             }
             let _ = pending.reply.send(Err(STOPPED_MESSAGE.to_owned()));
         }
@@ -248,7 +248,7 @@ impl BrowserAgent {
         self.pending = pending;
         for pending in resolved {
             if let Some(view) = pending.view.upgrade(ctx) {
-                view.update(ctx, |view, ctx| view.clear_agent_approval(ctx));
+                view.update(ctx, |view, ctx| view.clear_agent_approval(&pending.site, ctx));
             }
             match decision {
                 AgentApproval::Once | AgentApproval::Always => {

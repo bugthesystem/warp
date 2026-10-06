@@ -1,3 +1,4 @@
+use warp_browser::annotation::strip_control_characters;
 use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 
 use super::view::PaneView;
@@ -73,7 +74,7 @@ impl PaneContent for BrowserPane {
                     pane_group.handle_pane_event(pane_id, pane_event, ctx)
                 }
                 BrowserViewEvent::SendToAgent(text) => {
-                    pane_group.paste_into_agent_terminal(text.clone(), ctx);
+                    pane_group.paste_into_agent_terminal(strip_control_characters(text), ctx);
                 }
             },
         );

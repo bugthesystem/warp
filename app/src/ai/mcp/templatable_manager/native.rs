@@ -765,14 +765,6 @@ impl TemplatableMCPServerManager {
         self.spawn_ephemeral_server(installation, ctx);
     }
 
-    /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
-    /// MCP) with the feature-flag and auth state: spawns the server when it
-    /// should be running and isn't, and shuts it down when it shouldn't be.
-    /// Safe to call repeatedly.
-    ///
-    /// `force_respawn` restarts an already-running server so it picks up
-    /// rotated credentials: the transport keeps the `Authorization` header it
-    /// was spawned with.
     /// Attaches the built-in browser MCP server, which Warp's local HTTP server hosts, so the
     /// agent can drive browser panes. Call once that server is listening.
     pub fn attach_browser_server(&mut self, ctx: &mut ModelContext<Self>) {
@@ -784,6 +776,14 @@ impl TemplatableMCPServerManager {
         }
     }
 
+    /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
+    /// MCP) with the feature-flag and auth state: spawns the server when it
+    /// should be running and isn't, and shuts it down when it shouldn't be.
+    /// Safe to call repeatedly.
+    ///
+    /// `force_respawn` restarts an already-running server so it picks up
+    /// rotated credentials: the transport keeps the `Authorization` header it
+    /// was spawned with.
     pub fn sync_builtin_servers(&mut self, force_respawn: bool, ctx: &mut ModelContext<Self>) {
         let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();

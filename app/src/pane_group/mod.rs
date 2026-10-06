@@ -121,8 +121,8 @@ use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
@@ -7936,7 +7936,6 @@ impl PaneGroup {
             .collect()
     }
 
-    /// Filters out any hidden panes that aren't yet deleted (due to undo functionality).
     /// Pastes `text` into a terminal in this tab that is not running a CLI agent, preferring the
     /// active session, and focuses it. Nothing is submitted. Returns whether a terminal received
     /// it.
@@ -7989,6 +7988,7 @@ impl PaneGroup {
         true
     }
 
+    /// Filters out any hidden panes that aren't yet deleted (due to undo functionality).
     pub fn terminal_views(&self, ctx: &AppContext) -> Vec<ViewHandle<TerminalView>> {
         self.panes_of::<TerminalPane>()
             .filter(|p| !self.is_pane_hidden_for_close(p.terminal_pane_id().into()))

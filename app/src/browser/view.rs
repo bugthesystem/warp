@@ -143,8 +143,9 @@ pub struct BrowserView {
     agent_step_generation: u64,
     pause_agent_button: MouseStateHandle,
     stop_agent_button: MouseStateHandle,
-    /// A site an agent is waiting for the user to approve.
-    agent_approval_site: Option<String>,
+    /// Sites agents are waiting on the user's approval for, in the order they asked. The banner
+    /// shows the first.
+    agent_approval_sites: Vec<String>,
     approve_once_button: MouseStateHandle,
     approve_always_button: MouseStateHandle,
     deny_button: MouseStateHandle,
@@ -242,7 +243,7 @@ impl BrowserView {
             agent_step_generation: 0,
             pause_agent_button: MouseStateHandle::default(),
             stop_agent_button: MouseStateHandle::default(),
-            agent_approval_site: None,
+            agent_approval_sites: Vec::new(),
             approve_once_button: MouseStateHandle::default(),
             approve_always_button: MouseStateHandle::default(),
             deny_button: MouseStateHandle::default(),
@@ -338,7 +339,9 @@ impl BrowserView {
 
     /// Asks the user, in this pane, whether an agent may use `site`.
     pub fn request_agent_approval(&mut self, site: String, ctx: &mut ViewContext<Self>) {
-        self.agent_approval_site = Some(site);
+        if !self.agent_approval_sites.contains(&site) {
+            self.agent_approval_sites.push(site);
+        }
         ctx.notify();
     }
 
@@ -354,7 +357,7 @@ impl BrowserView {
             return;
         }
         self.set_annotating(false, ctx);
-        if self.agent_approval_site.take().is_some() {
+        if !std::mem::take(&mut self.agent_approval_sites).is_empty() {
             #[cfg(not(target_family = "wasm"))]
             {
                 let view_id = ctx.view_id();
@@ -381,8 +384,8 @@ impl BrowserView {
         ctx.notify();
     }
 
-    pub fn clear_agent_approval(&mut self, ctx: &mut ViewContext<Self>) {
-        self.agent_approval_site = None;
+    pub fn clear_agent_approval(&mut self, site: &str, ctx: &mut ViewContext<Self>) {
+        self.agent_approval_sites.retain(|pending| pending != site);
         ctx.notify();
     }
 
@@ -586,7 +589,8 @@ impl BrowserView {
 
     fn handle_page_action(&mut self, action: &str, ctx: &mut ViewContext<Self>) {
         match action {
-            SEND_NOTES_ACTION => self.send_notes(ctx),
+            SEND_NOTES_ACTION if self.annotating => self.send_notes(ctx),
+            SEND_NOTES_ACTION => log::warn!("Ignored sending notes outside annotate mode"),
             screenshot::COPY_ACTION => {
                 let Some(path) = &self.last_screenshot else {
                     return;
@@ -724,6 +728,11 @@ impl BrowserView {
                 }
             }
             WebViewEvent::PageFocused => {}
+            // Any page script can post these messages, so only accept them from the page the
+            // user is annotating, which is where Warp's own buttons live.
+            WebViewEvent::Annotation(_) if !(index == self.active_tab && self.annotating) => {
+                log::warn!("Ignored a browser annotation posted outside annotate mode");
+            }
             WebViewEvent::Annotation(json) => match PageAnnotation::parse(&json) {
                 Some(annotation) => {
                     log::info!("Received a browser annotation");
@@ -733,7 +742,12 @@ impl BrowserView {
                 }
                 None => log::warn!("Ignored a malformed browser annotation"),
             },
-            WebViewEvent::PageAction(action) => self.handle_page_action(&action, ctx),
+            WebViewEvent::PageAction(action) if index == self.active_tab => {
+                self.handle_page_action(&action, ctx)
+            }
+            WebViewEvent::PageAction(action) => {
+                log::warn!("Ignored browser page action `{action}` from a background tab");
+            }
             WebViewEvent::AnnotateExited => {
                 if index == self.active_tab {
                     self.annotating = false;
@@ -1415,7 +1429,11 @@ fn create_webview(
             bounds: Some(bounds),
         }),
         Err(err) => {
-            report_error!(anyhow::Error::new(err).context("Failed to create browser web view"));
+            // Creation is retried after every frame, so report it only once.
+            report_error!(
+                anyhow::Error::new(err).context("Failed to create browser web view"),
+                ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -1635,7 +1653,7 @@ impl View for BrowserView {
         if agent_active {
             column.add_child(self.render_agent_activity(agent_paused, appearance));
         }
-        if let Some(site) = &self.agent_approval_site {
+        if let Some(site) = self.agent_approval_sites.first() {
             column.add_child(self.render_agent_approval(site, appearance));
         }
         let content_area = if agent_active {
@@ -1672,9 +1690,10 @@ impl TypedActionView for BrowserView {
                 self.load_url(tab_id, url.clone(), false, ctx);
             }
             BrowserViewAction::ResolveAgentApproval(decision) => {
-                let Some(site) = self.agent_approval_site.take() else {
+                if self.agent_approval_sites.is_empty() {
                     return;
-                };
+                }
+                let site = self.agent_approval_sites.remove(0);
                 ctx.notify();
                 #[cfg(not(target_family = "wasm"))]
                 super::BrowserAgent::handle(ctx).update(ctx, |agent, ctx| {

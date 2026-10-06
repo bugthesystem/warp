@@ -15474,10 +15474,6 @@ impl Workspace {
         });
     }
 
-    /// Opens the in-app network log pane as a right-split of the active pane
-    /// group. If a pane already exists for the current window, refreshes its
-    /// snapshot from the in-memory model and focuses it instead of opening
-    /// another one.
     /// Opens a browser pane as a right-split of the active pane group.
     fn open_browser_pane(&mut self, url: Option<String>, ctx: &mut ViewContext<Self>) {
         let pane = BrowserPane::new(url, ctx);
@@ -15491,6 +15487,10 @@ impl Workspace {
         });
     }
 
+    /// Opens the in-app network log pane as a right-split of the active pane
+    /// group. If a pane already exists for the current window, refreshes its
+    /// snapshot from the in-memory model and focuses it instead of opening
+    /// another one.
     pub(crate) fn open_network_log_pane(&mut self, ctx: &mut ViewContext<Self>) {
         let manager = NetworkLogPaneManager::handle(ctx);
 
