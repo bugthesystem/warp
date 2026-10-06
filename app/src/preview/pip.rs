@@ -309,7 +309,6 @@ impl View for PreviewPipView {
             StageOptions {
                 position_id: &self.position_id,
                 in_picture_in_picture: true,
-                show_cards: false,
                 approval: self
                     .approval
                     .as_ref()

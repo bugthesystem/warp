@@ -1,16 +1,21 @@
 //! What a preview pane and the picture-in-picture window both show: the front preview, the other
-//! previews as live cards beside it, and a thin floating bar of controls over the picture.
+//! previews as a pile of live cards over its corner, and a thin floating bar of controls over the
+//! picture.
+
+use std::time::Duration;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::assets::asset_cache::AssetSource;
+use warpui::fonts::FamilyId;
 use warpui::elements::{
     Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, Hoverable, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    Flex, Hoverable, Image, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
     Stack, Text,
 };
+use warpui::scene::DropShadow;
 use warpui::image_cache::CacheOption;
 use warpui::ui_components::components::UiComponent;
 use warpui::{Action, AppContext, Element, SingletonEntity};
@@ -23,10 +28,13 @@ use crate::ui_components::icons::Icon;
 const BAR_HEIGHT: f32 = 30.;
 const BAR_ICON_SIZE: f32 = 15.;
 const BAR_BUTTON_WIDTH: f32 = 28.;
-/// Width of the column of cards beside the front preview.
-const CARD_WIDTH: f32 = 168.;
-const CARD_PICTURE_HEIGHT: f32 = 94.;
 const PICTURE_CORNER_RADIUS: f32 = 10.;
+/// How many cards the collapsed pile draws; the rest are counted on its badge.
+const PILE_DEPTH: usize = 3;
+/// How far each card in the collapsed pile sits up and to the left of the one in front of it.
+const PILE_STEP: f32 = 7.;
+/// Keeps the pile fanned out while the pointer crosses the gaps between cards.
+const PILE_HOVER_OUT_DELAY: Duration = Duration::from_millis(250);
 
 /// The stage keeps one dark look in both themes, since it shows another program's pixels.
 const STAGE_BACKGROUND: ColorU = ColorU {
@@ -112,6 +120,7 @@ pub struct StageMouseStates {
     approve_once: MouseStateHandle,
     approve_always: MouseStateHandle,
     deny: MouseStateHandle,
+    pile: MouseStateHandle,
     cards: Vec<(MouseStateHandle, MouseStateHandle)>,
 }
 
@@ -127,10 +136,9 @@ impl StageMouseStates {
 /// What a stage shows besides its previews.
 pub struct StageOptions<'a> {
     pub position_id: &'a str,
-    /// Whether the stage is the picture-in-picture window, which changes the pop-out button.
+    /// Whether the stage is the picture-in-picture window, which changes the pop-out button and
+    /// shrinks the pile.
     pub in_picture_in_picture: bool,
-    /// Whether the previews behind the front one show as cards beside it.
-    pub show_cards: bool,
     /// An app an agent is waiting for the user to approve.
     pub approval: Option<&'a str>,
     /// What an agent is doing with the front preview right now.
@@ -179,6 +187,22 @@ pub fn render_stage<A: Action + Clone>(
             ChildAnchor::BottomMiddle,
         ),
     );
+    if cards.len() > 1 {
+        let size = if options.in_picture_in_picture {
+            PileSize::SMALL
+        } else {
+            PileSize::REGULAR
+        };
+        picture.add_positioned_child(
+            render_pile(cards, front, size, streams, mouse_states, wrap, appearance),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-12., -12.),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::BottomRight,
+            ),
+        );
+    }
     if let Some(app_name) = options.approval {
         picture.add_positioned_child(
             render_approval(app_name, mouse_states, wrap, appearance),
@@ -195,20 +219,7 @@ pub fn render_stage<A: Action + Clone>(
     if options.agent_step.is_some() {
         picture = picture.with_border(Border::all(2.).with_border_fill(AGENT));
     }
-    let mut row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(Expanded::new(1., picture.finish()).finish());
-    if options.show_cards && cards.len() > 1 {
-        row.add_child(render_cards(
-            cards,
-            front,
-            streams,
-            mouse_states,
-            wrap,
-            appearance,
-        ));
-    }
-    Container::new(row.finish())
+    Container::new(picture.finish())
         .with_background(STAGE_BACKGROUND)
         .finish()
 }
@@ -633,45 +644,149 @@ fn render_approval<A: Action + Clone>(
     .finish()
 }
 
-/// The previews behind the front one, as small live cards. Clicking one brings it to the front.
-fn render_cards<A: Action + Clone>(
+/// Sizes of the pile's cards: collapsed thumbnails and fanned-out cards.
+#[derive(Clone, Copy)]
+struct PileSize {
+    thumbnail: (f32, f32),
+    card: (f32, f32),
+}
+
+impl PileSize {
+    const REGULAR: Self = Self {
+        thumbnail: (112., 63.),
+        card: (152., 86.),
+    };
+    const SMALL: Self = Self {
+        thumbnail: (72., 41.),
+        card: (104., 59.),
+    };
+}
+
+/// The previews behind the front one, piled up over the picture's corner. Hovering the pile fans
+/// it out into a row of cards; clicking a card brings it to the front.
+fn render_pile<A: Action + Clone>(
     cards: &[PreviewId],
     front: PreviewId,
+    size: PileSize,
     streams: &PreviewStreams,
     mouse_states: &StageMouseStates,
     wrap: fn(StageAction) -> A,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let mut column = Flex::column()
-        .with_spacing(8.)
-        .with_main_axis_size(MainAxisSize::Min)
-        .with_main_axis_alignment(MainAxisAlignment::Start);
-    for (id, (card_state, close_state)) in cards.iter().zip(&mouse_states.cards) {
-        let Some(preview) = streams.get(*id) else {
-            continue;
-        };
-        column.add_child(render_card(
-            preview,
-            *id == front,
-            card_state,
-            close_state,
-            wrap,
-            appearance,
-        ));
+    let behind: Vec<(&Preview, &(MouseStateHandle, MouseStateHandle))> = cards
+        .iter()
+        .zip(&mouse_states.cards)
+        .filter(|(id, _)| **id != front)
+        .filter_map(|(id, states)| Some((streams.get(*id)?, states)))
+        .collect();
+    if behind.is_empty() {
+        return Empty::new().finish();
     }
-    ConstrainedBox::new(
-        Container::new(column.finish())
-            .with_uniform_padding(10.)
-            .with_border(Border::left(1.).with_border_fill(GLASS_LINE))
-            .finish(),
-    )
-    .with_width(CARD_WIDTH + 20.)
+
+    let font_family = appearance.ui_font_family();
+    Hoverable::new(mouse_states.pile.clone(), |mouse| {
+        if mouse.is_hovered() {
+            return glass_tray(
+                Flex::row()
+                    .with_spacing(6.)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_children(behind.iter().map(|(preview, (card_state, close_state))| {
+                        render_card(preview, size, card_state, close_state, wrap, appearance)
+                    }))
+                    .finish(),
+            );
+        }
+        let thumbnails: Vec<Option<AssetSource>> = behind
+            .iter()
+            .skip(behind.len().saturating_sub(PILE_DEPTH))
+            .map(|(preview, _)| preview.frame_size.map(|_| preview.frame_asset()))
+            .collect();
+        let hidden_count = behind.len().saturating_sub(PILE_DEPTH);
+        render_collapsed_pile(&thumbnails, hidden_count, size, font_family)
+    })
+    .with_hover_out_delay(PILE_HOVER_OUT_DELAY)
     .finish()
+}
+
+/// Up to [`PILE_DEPTH`] thumbnails stacked with a small offset, the newest in front.
+fn render_collapsed_pile(
+    thumbnails: &[Option<AssetSource>],
+    hidden_count: usize,
+    size: PileSize,
+    font_family: FamilyId,
+) -> Box<dyn Element> {
+    let (width, height) = size.thumbnail;
+    let depth = thumbnails.len().saturating_sub(1) as f32 * PILE_STEP;
+    let mut pile = Stack::new().with_child(
+        ConstrainedBox::new(Empty::new().finish())
+            .with_width(width + depth)
+            .with_height(height + depth)
+            .finish(),
+    );
+    for (index, asset) in thumbnails.iter().enumerate() {
+        let picture = match asset {
+            Some(asset) => frame_image_from(asset.clone(), 1.),
+            None => Empty::new().finish(),
+        };
+        let thumbnail = Container::new(
+            ConstrainedBox::new(picture)
+                .with_width(width)
+                .with_height(height)
+                .finish(),
+        )
+        .with_background(STAGE_BACKGROUND)
+        .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_drop_shadow(DropShadow::default())
+        .finish();
+        let offset = index as f32 * PILE_STEP;
+        pile.add_positioned_child(
+            thumbnail,
+            OffsetPositioning::offset_from_parent(
+                vec2f(offset, offset),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::TopLeft,
+                ChildAnchor::TopLeft,
+            ),
+        );
+    }
+    if hidden_count > 0 {
+        pile.add_positioned_child(
+            Container::new(
+                Text::new_inline(format!("+{hidden_count}"), font_family, 11.)
+                    .with_color(STAGE_TEXT)
+                    .finish(),
+            )
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(1.)
+            .with_background(GLASS)
+            .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(-4., -4.),
+                ParentOffsetBounds::ParentByPosition,
+                ParentAnchor::BottomRight,
+                ChildAnchor::BottomRight,
+            ),
+        );
+    }
+    pile.finish()
+}
+
+fn glass_tray(child: Box<dyn Element>) -> Box<dyn Element> {
+    Container::new(child)
+        .with_uniform_padding(6.)
+        .with_background(GLASS)
+        .with_border(Border::all(1.).with_border_fill(GLASS_LINE))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
+        .with_drop_shadow(DropShadow::default())
+        .finish()
 }
 
 fn render_card<A: Action + Clone>(
     preview: &Preview,
-    is_front: bool,
+    size: PileSize,
     card_state: &MouseStateHandle,
     close_state: &MouseStateHandle,
     wrap: fn(StageAction) -> A,
@@ -681,34 +796,35 @@ fn render_card<A: Action + Clone>(
     let label = preview.label();
     let asset = preview.frame_size.map(|_| preview.frame_asset());
     let font_family = appearance.ui_font_family();
+    let (width, height) = size.card;
     let card = Hoverable::new(card_state.clone(), move |mouse| {
         let picture = match &asset {
             Some(asset) => frame_image_from(asset.clone(), 1.),
             None => Empty::new().finish(),
         };
-        let border = if is_front || mouse.is_hovered() {
-            LIT
+        let (border, text) = if mouse.is_hovered() {
+            (LIT, STAGE_TEXT)
         } else {
-            GLASS_LINE
+            (GLASS_LINE, STAGE_MUTED)
         };
-        Container::new(
-            Flex::column()
-                .with_spacing(4.)
-                .with_child(
-                    ConstrainedBox::new(picture)
-                        .with_height(CARD_PICTURE_HEIGHT)
-                        .finish(),
-                )
-                .with_child(
-                    Text::new_inline(label.clone(), font_family, 11.5)
-                        .with_color(if is_front { STAGE_TEXT } else { STAGE_MUTED })
-                        .finish(),
-                )
-                .finish(),
+        ConstrainedBox::new(
+            Container::new(
+                Flex::column()
+                    .with_spacing(4.)
+                    .with_child(ConstrainedBox::new(picture).with_height(height).finish())
+                    .with_child(
+                        Text::new_inline(label.clone(), font_family, 11.)
+                            .with_color(text)
+                            .finish(),
+                    )
+                    .finish(),
+            )
+            .with_uniform_padding(4.)
+            .with_border(Border::all(1.).with_border_fill(border))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .finish(),
         )
-        .with_uniform_padding(4.)
-        .with_border(Border::all(1.).with_border_fill(border))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_width(width)
         .finish()
     })
     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(wrap(StageAction::BringToFront(id))))

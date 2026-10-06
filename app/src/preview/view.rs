@@ -817,7 +817,6 @@ impl View for PreviewView {
             StageOptions {
                 position_id: &self.position_id,
                 in_picture_in_picture: false,
-                show_cards: true,
                 approval: self
                     .approval
                     .as_ref()
