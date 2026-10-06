@@ -854,6 +854,11 @@ impl<S> TerminalManager<S> {
                 .reuse_existing_control_master
                 .value();
 
+        let mut env_vars = env_vars;
+        for (name, value) in crate::browser::terminal_env_vars() {
+            env_vars.entry(name).or_insert(value);
+        }
+
         let size: SizeInfo = model.lock().block_list().size().to_owned();
         let options = PtyOptions {
             size,

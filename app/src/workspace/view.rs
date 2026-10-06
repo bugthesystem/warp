@@ -24550,21 +24550,33 @@ impl TypedActionView for Workspace {
                 self.open_browser_pane(url.clone(), ctx);
             }
             #[cfg(not(target_family = "wasm"))]
-            CopyBrowserAgentSetup => {
-                ctx.clipboard().write(ClipboardContent::plain_text(
-                    crate::browser::claude_code_setup_command(),
-                ));
+            SetUpClaudeCodeBrowserTools => {
+                let message = match crate::browser::write_claude_code_plugin() {
+                    Ok(command) => {
+                        let pasted = self.active_tab_pane_group().update(ctx, |group, ctx| {
+                            group.paste_into_shell_terminal(command.clone(), ctx)
+                        });
+                        if pasted {
+                            "Press Enter to install Warp's browser tools in Claude Code. After \
+                             that, Claude Code started in Warp has them without setup."
+                        } else {
+                            ctx.clipboard().write(ClipboardContent::plain_text(command));
+                            "Install command copied. Run it in a terminal to give Claude Code \
+                             Warp's browser tools."
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to write the Claude Code browser plugin: {err:#}");
+                        "Couldn't write the Claude Code plugin for browser tools."
+                    }
+                };
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(
-                        "Claude Code setup copied. Run it in a terminal to give Claude Code the \
-                         browser tools."
-                            .to_string(),
-                    );
-                    toast_stack.add_ephemeral_toast(toast, ctx);
+                    toast_stack
+                        .add_ephemeral_toast(DismissibleToast::default(message.to_owned()), ctx);
                 });
             }
             #[cfg(target_family = "wasm")]
-            CopyBrowserAgentSetup => {}
+            SetUpClaudeCodeBrowserTools => {}
             #[cfg(not(target_family = "wasm"))]
             ToggleBrowserAgentAutoApprove => {
                 crate::browser::BrowserAgent::handle(ctx)

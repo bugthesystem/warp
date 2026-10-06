@@ -2168,9 +2168,9 @@ pub fn init(app: &mut AppContext) {
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 
     app.register_editable_bindings([EditableBinding::new(
-        "workspace:copy_browser_agent_setup",
-        "Copy Claude Code setup for browser tools",
-        WorkspaceAction::CopyBrowserAgentSetup,
+        "workspace:set_up_claude_code_browser_tools",
+        "Set up browser tools for Claude Code",
+        WorkspaceAction::SetUpClaudeCodeBrowserTools,
     )
     .with_enabled(|| FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported())]);
 

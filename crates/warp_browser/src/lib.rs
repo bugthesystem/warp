@@ -7,6 +7,7 @@
 #[cfg(not(target_family = "wasm"))]
 pub mod agent;
 pub mod annotation;
+pub mod claude_plugin;
 pub mod history;
 pub mod local_servers;
 pub mod screenshot;

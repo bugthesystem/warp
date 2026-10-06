@@ -7937,6 +7937,32 @@ impl PaneGroup {
     }
 
     /// Filters out any hidden panes that aren't yet deleted (due to undo functionality).
+    /// Pastes `text` into a terminal in this tab that is not running a CLI agent, preferring the
+    /// active session, and focuses it. Nothing is submitted. Returns whether a terminal received
+    /// it.
+    pub fn paste_into_shell_terminal(&mut self, text: String, ctx: &mut ViewContext<Self>) -> bool {
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        let shells: Vec<(PaneId, ViewHandle<TerminalView>)> = self
+            .panes_of::<TerminalPane>()
+            .map(|pane| (pane.terminal_pane_id().into(), pane.terminal_view(ctx)))
+            .filter(|(pane_id, view)| {
+                !self.is_pane_hidden_for_close(*pane_id) && sessions.session(view.id()).is_none()
+            })
+            .collect();
+        let active = self.active_session_view(ctx).map(|view| view.id());
+        let target = shells
+            .iter()
+            .find(|(_, view)| Some(view.id()) == active)
+            .or(shells.first())
+            .cloned();
+        let Some((pane_id, view)) = target else {
+            return false;
+        };
+        view.update(ctx, |view, ctx| view.paste_text(text, ctx));
+        self.focus_pane(pane_id, true, ctx);
+        true
+    }
+
     /// Pastes `text` into the terminal in this tab that runs a CLI agent, such as Claude Code, or
     /// into the active terminal session when none does, and focuses that pane. Returns whether a
     /// terminal received it.

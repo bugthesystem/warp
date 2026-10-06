@@ -882,8 +882,9 @@ pub enum WorkspaceAction {
     OpenBrowserPane {
         url: Option<String>,
     },
-    /// Copies a command that connects Claude Code to the browser pane's agent tools.
-    CopyBrowserAgentSetup,
+    /// Writes the Claude Code plugin for the browser pane's agent tools and puts its install
+    /// command in a terminal.
+    SetUpClaudeCodeBrowserTools,
     /// Switches between agents asking before using sites that are not local in browser panes,
     /// and approving them automatically.
     ToggleBrowserAgentAutoApprove,
@@ -1221,7 +1222,7 @@ impl WorkspaceAction {
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
             | OpenBrowserPane { .. }
-            | CopyBrowserAgentSetup
+            | SetUpClaudeCodeBrowserTools
             | ToggleBrowserAgentAutoApprove
             | OpenNewWindowForTeam { .. }
             | BrowseTeams

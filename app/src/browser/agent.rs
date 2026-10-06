@@ -1,6 +1,7 @@
 //! Runs agents' browser tool calls against browser panes. Calls arrive from the browser MCP
 //! endpoint on Warp's local HTTP server.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -8,8 +9,11 @@ use std::time::Duration;
 use serde::Deserialize;
 use warp_browser::agent::{self, BrowserCommand, PagePoint, ToolOutput, ToolRequest};
 use warp_browser::annotation::{PageAnnotation, format_annotations};
+use warp_browser::claude_plugin;
 use warp_browser::sites::{ApprovedSites, site_requiring_approval};
 use warpui::r#async::Timer;
+
+use crate::features::FeatureFlag;
 use warpui::{
     Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle, WeakViewHandle,
 };
@@ -46,14 +50,29 @@ pub fn mcp_url() -> String {
     )
 }
 
-/// A shell command that connects Claude Code to Warp's browser tools.
-pub fn claude_code_setup_command() -> String {
-    format!(
-        "claude mcp add --transport http warp-browser {} --header \"Authorization: Bearer {}\"",
-        mcp_url(),
-        mcp_token()
-    )
+/// Variables every Warp terminal gets, so Claude Code's warp-browser plugin reaches the browser
+/// tools without setup.
+pub fn terminal_env_vars() -> Vec<(OsString, OsString)> {
+    if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
+        return Vec::new();
+    }
+    vec![
+        (claude_plugin::URL_ENV.into(), mcp_url().into()),
+        (claude_plugin::TOKEN_ENV.into(), mcp_token().into()),
+    ]
 }
+
+/// Writes the warp-browser Claude Code plugin into Warp's config directory and returns the shell
+/// command that installs it.
+pub fn write_claude_code_plugin() -> std::io::Result<String> {
+    let dir = warp_core::paths::warp_home_config_dir()
+        .ok_or_else(|| std::io::Error::other("Warp has no config directory"))?
+        .join(CLAUDE_PLUGIN_DIR_NAME);
+    claude_plugin::write_marketplace(&dir)?;
+    Ok(claude_plugin::install_command(&dir))
+}
+
+const CLAUDE_PLUGIN_DIR_NAME: &str = "claude-plugin";
 
 const APPROVED_SITES_FILE_NAME: &str = "browser-agent-sites.json";
 
