@@ -531,6 +531,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::StoredScreenshots,
         #[cfg(feature = "browser_pane")]
         FeatureFlag::BrowserPane,
+        #[cfg(feature = "preview_pane")]
+        FeatureFlag::PreviewPane,
     ]);
 
     flags

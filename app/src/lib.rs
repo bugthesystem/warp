@@ -58,6 +58,7 @@ mod platform;
 mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
+mod preview;
 mod pricing;
 mod profiling;
 mod projects;
@@ -1877,6 +1878,10 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     ctx.add_singleton_model(browser::BrowserAgent::new);
     ctx.on_frame_drawn(|ctx, window_id| browser::sync_webviews(window_id, ctx));
+    ctx.add_singleton_model(preview::PreviewStreams::new);
+    ctx.add_singleton_model(|_| preview::PreviewRegistry::default());
+    ctx.add_singleton_model(preview::PreviewAgent::new);
+    ctx.on_frame_drawn(|ctx, window_id| preview::sync_previews(window_id, ctx));
     ctx.add_singleton_model(|_| pricing::PricingInfoModel::new());
     ctx.add_singleton_model(ai::pricing_promotion::PricingPromotionState::new);
     ctx.add_singleton_model(|ctx| {
@@ -2632,8 +2637,8 @@ pub(crate) fn initialize_app(
                 app_installation_detection::make_router(),
                 profiling::make_router(),
             ];
-            if FeatureFlag::BrowserPane.is_enabled() && warp_browser::is_supported() {
-                routers.push(browser::BrowserAgent::as_ref(ctx).router());
+            if browser::agent_tools_enabled() {
+                routers.push(browser::mcp_router(ctx));
             }
             http_server::HttpServer::new(routers, ctx)
         });

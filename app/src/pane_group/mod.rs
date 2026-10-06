@@ -194,6 +194,7 @@ mod tests;
 pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::browser_pane::BrowserPane;
+pub use pane::preview_pane::PreviewPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
 pub use pane::custom_router_editor_pane::CustomRouterEditorPane;
@@ -2008,6 +2009,9 @@ impl PaneGroup {
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
             }
+            LeafContents::Preview => Err(anyhow::anyhow!(
+                "Preview pane should not have been persisted, as it cannot be restored"
+            )),
             LeafContents::Browser(snapshot) => {
                 if !FeatureFlag::BrowserPane.is_enabled() || !warp_browser::is_supported() {
                     return Err(anyhow::anyhow!("Browser panes are not enabled"));

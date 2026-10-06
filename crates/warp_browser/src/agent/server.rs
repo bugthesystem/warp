@@ -15,6 +15,7 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::{Map, Value, json};
+use warp_preview::agent::{PreviewCommand, PreviewOutput, PreviewToolRequest};
 
 use super::{BrowserCommand, ToolOutput, ToolRequest};
 
@@ -31,15 +32,17 @@ browser_click or browser_type. Element numbers change whenever browser_read runs
 browser_console to check for errors after changing a page, and browser_annotations to read notes \
 the user pinned to page elements.";
 
+/// Where the endpoint sends each kind of tool call. A kind without a channel is not offered.
+#[derive(Clone, Default)]
+pub struct ToolChannels {
+    pub browser: Option<async_channel::Sender<ToolRequest>>,
+    pub preview: Option<async_channel::Sender<PreviewToolRequest>>,
+}
+
 /// Builds the router serving the browser MCP endpoint, which requires `token` as a bearer token.
-/// Tool calls are sent to `requests`.
-pub fn router(requests: async_channel::Sender<ToolRequest>, token: &str) -> axum::Router {
+pub fn router(channels: ToolChannels, token: &str) -> axum::Router {
     let service = StreamableHttpService::new(
-        move || {
-            Ok(BrowserMcpServer {
-                requests: requests.clone(),
-            })
-        },
+        move || Ok(BrowserMcpServer(channels.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
@@ -70,14 +73,13 @@ async fn require_token(
 }
 
 #[derive(Clone)]
-struct BrowserMcpServer {
-    requests: async_channel::Sender<ToolRequest>,
-}
+struct BrowserMcpServer(ToolChannels);
 
 impl BrowserMcpServer {
     async fn run(&self, command: BrowserCommand) -> Result<ToolOutput, String> {
+        let requests = self.0.browser.as_ref().ok_or_else(unavailable)?;
         let (reply, response) = tokio::sync::oneshot::channel();
-        self.requests
+        requests
             .send(ToolRequest { command, reply })
             .await
             .map_err(|_| "Warp is shutting down".to_owned())?;
@@ -87,12 +89,94 @@ impl BrowserMcpServer {
             Err(_) => Err("Timed out waiting for the page or for the user's approval".to_owned()),
         }
     }
+
+    async fn run_preview(&self, command: PreviewCommand) -> Result<PreviewOutput, String> {
+        let requests = self.0.preview.as_ref().ok_or_else(unavailable)?;
+        let (reply, response) = async_channel::bounded(1);
+        requests
+            .send(PreviewToolRequest { command, reply })
+            .await
+            .map_err(|_| "Warp is shutting down".to_owned())?;
+        match tokio::time::timeout(TOOL_TIMEOUT, response.recv()).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("The preview closed before responding".to_owned()),
+            Err(_) => {
+                Err("Timed out waiting for the preview or for the user's approval".to_owned())
+            }
+        }
+    }
+
+    async fn call(&self, name: &str, args: &Map<String, Value>) -> CallToolResult {
+        if PreviewCommand::is_preview_tool(name) {
+            let result = match PreviewCommand::from_tool_call(name, args) {
+                Ok(command) => self.run_preview(command).await,
+                Err(message) => Err(message),
+            };
+            return match result {
+                Ok(PreviewOutput { text, jpeg }) => {
+                    let mut content = vec![ContentBlock::text(text)];
+                    if let Some(jpeg) = jpeg {
+                        content.push(ContentBlock::image(
+                            base64::engine::general_purpose::STANDARD.encode(jpeg),
+                            "image/jpeg",
+                        ));
+                    }
+                    CallToolResult::success(content)
+                }
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
+        let result = match BrowserCommand::from_tool_call(name, args) {
+            Ok(command) => self.run(command).await,
+            Err(message) => Err(message),
+        };
+        match result {
+            Ok(ToolOutput::Text(text)) => CallToolResult::success(vec![ContentBlock::text(text)]),
+            Ok(ToolOutput::Png(png)) => CallToolResult::success(vec![ContentBlock::image(
+                base64::engine::general_purpose::STANDARD.encode(png),
+                "image/png",
+            )]),
+            Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+        }
+    }
+
+    fn instructions(&self) -> String {
+        let mut instructions = Vec::new();
+        if self.0.browser.is_some() {
+            instructions.push(SERVER_INSTRUCTIONS);
+        }
+        if self.0.preview.is_some() {
+            instructions.push(warp_preview::agent::SERVER_INSTRUCTIONS);
+        }
+        instructions.join(" ")
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        let mut tools = Vec::new();
+        if self.0.browser.is_some() {
+            tools.extend(tool_definitions());
+        }
+        if self.0.preview.is_some() {
+            tools.extend(
+                warp_preview::agent::tool_definitions()
+                    .into_iter()
+                    .map(|(name, description, properties, required)| {
+                        tool(name, description, properties, required)
+                    }),
+            );
+        }
+        tools
+    }
+}
+
+fn unavailable() -> String {
+    "This tool is not enabled in this Warp".to_owned()
 }
 
 impl ServerHandler for BrowserMcpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(SERVER_INSTRUCTIONS)
+            .with_instructions(self.instructions())
     }
 
     async fn list_tools(
@@ -102,7 +186,7 @@ impl ServerHandler for BrowserMcpServer {
     ) -> Result<ListToolsResult, McpError> {
         // Protocol 2026-07-28 clients reject list results without cache hints. The tools only
         // reach holders of this Warp instance's token, so they must not be shared.
-        Ok(ListToolsResult::with_all_items(tool_definitions())
+        Ok(ListToolsResult::with_all_items(self.tools())
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
     }
@@ -113,19 +197,7 @@ impl ServerHandler for BrowserMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let args = request.arguments.unwrap_or_default();
-        let result = match BrowserCommand::from_tool_call(&request.name, &args) {
-            Ok(command) => self.run(command).await,
-            Err(message) => Err(message),
-        };
-        let result = match result {
-            Ok(ToolOutput::Text(text)) => CallToolResult::success(vec![ContentBlock::text(text)]),
-            Ok(ToolOutput::Png(png)) => CallToolResult::success(vec![ContentBlock::image(
-                base64::engine::general_purpose::STANDARD.encode(png),
-                "image/png",
-            )]),
-            Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
-        };
-        Ok(result.into())
+        Ok(self.call(&request.name, &args).await.into())
     }
 }
 

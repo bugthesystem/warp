@@ -882,6 +882,11 @@ pub enum WorkspaceAction {
     OpenBrowserPane {
         url: Option<String>,
     },
+    /// Opens a preview pane as a right-split of the active pane group, showing `previews` with the
+    /// last in front, or its start page when there are none. Gated on `FeatureFlag::PreviewPane`.
+    OpenPreviewPane {
+        previews: Vec<crate::preview::PreviewId>,
+    },
     /// Writes the Claude Code plugin for the browser pane's agent tools and puts its install
     /// command in a terminal.
     SetUpClaudeCodeBrowserTools,
@@ -1222,6 +1227,7 @@ impl WorkspaceAction {
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane
             | OpenBrowserPane { .. }
+            | OpenPreviewPane { .. }
             | SetUpClaudeCodeBrowserTools
             | ToggleBrowserAgentAutoApprove
             | OpenNewWindowForTeam { .. }

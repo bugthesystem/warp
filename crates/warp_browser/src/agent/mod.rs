@@ -16,5 +16,5 @@ pub use page::{
     prepare_type_script, press_script, read_page_script, scroll_started, scroll_to_script,
     type_now_script,
 };
-pub use server::{MCP_PATH, router};
+pub use server::{MCP_PATH, ToolChannels, router};
 pub use token::{load_or_create_token, new_token};

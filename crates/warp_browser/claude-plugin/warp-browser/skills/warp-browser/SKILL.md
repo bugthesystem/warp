@@ -1,6 +1,6 @@
 ---
 name: warp-browser
-description: Use Warp's browser pane to see and check web pages next to the terminal. Use when changing a web UI, checking a page running on localhost, reproducing a bug in the browser, or when the user mentions their browser notes, annotations or a page they are looking at in Warp.
+description: Use Warp's browser and preview panes to see and check web pages and other apps next to the terminal. Use when changing a web UI, checking a page running on localhost, reproducing a bug in the browser, checking a game, engine or simulator window, or when the user mentions their browser notes, annotations or a page or preview they are looking at in Warp.
 ---
 
 # Warp browser pane
@@ -38,3 +38,18 @@ element, a CSS selector, the page URL and the element's HTML, which lead you to 
   for their answer. If it is denied, do not retry that site.
 - The user can pause or stop you from the pane. If a call says they stopped you, do not use the
   browser again until they ask.
+
+## Previews
+
+When the `preview_*` tools are available, Warp can also show a page in a headless browser, or
+another app's window such as a game engine, a running game or a simulator, live in a preview pane.
+
+1. `preview_targets` lists open previews and other apps' windows with their ids.
+2. `preview_open` with `url` or `window` shows it and replies with its first picture.
+3. After changing code or a scene, `preview_look` returns the current picture and the recent log
+   (console messages and errors for pages) in one call. `preview_screenshot` returns only the
+   picture, full size on request.
+
+Previews are for watching: change scenes and assets through the engine's own MCP server or the
+shell, then look again. Warp asks the user before you see another app's window or a page that is
+not local; if they deny it, do not retry.

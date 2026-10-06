@@ -304,9 +304,10 @@ use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, BrowserPane, ChildAgentOrigin, CodeDiffPane, CodePane,
     CodeReviewPanelArg, CustomRouterEditorPane, Direction as PaneGroupDirection, Direction,
     EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions,
-    PaneGroup, PaneId, PanesLayout, TabBarHoverIndex, TerminalPaneId,
+    PaneGroup, PaneId, PanesLayout, PreviewPane, TabBarHoverIndex, TerminalPaneId,
 };
 use crate::persistence::ModelEvent;
+use crate::preview::{self, PreviewId, PreviewRegistry};
 use crate::projects::ProjectManagementModel;
 use crate::prompt::editor_modal::{
     EditorModal as PromptEditorModal, EditorModalEvent as PromptEditorModalEvent,
@@ -2985,6 +2986,10 @@ impl Workspace {
         });
 
         ctx.observe(&RelaunchModel::handle(ctx), |_, _, ctx| {
+            ctx.notify();
+        });
+
+        ctx.observe(&PreviewRegistry::handle(ctx), |_, _, ctx| {
             ctx.notify();
         });
 
@@ -15487,6 +15492,22 @@ impl Workspace {
         });
     }
 
+    /// Opens a preview pane as a right-split of the active pane group.
+    fn open_preview_pane(&mut self, previews: Vec<PreviewId>, ctx: &mut ViewContext<Self>) {
+        if !preview::is_enabled() {
+            return;
+        }
+        let pane = PreviewPane::new(previews, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(
+                Direction::Right,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
     /// Opens the in-app network log pane as a right-split of the active pane
     /// group. If a pane already exists for the current window, refreshes its
     /// snapshot from the in-memory model and focuses it instead of opening
@@ -24546,6 +24567,9 @@ impl TypedActionView for Workspace {
             OpenNetworkLogPane => {
                 self.open_network_log_pane(ctx);
             }
+            OpenPreviewPane { previews } => {
+                self.open_preview_pane(previews.clone(), ctx);
+            }
             OpenBrowserPane { url } => {
                 self.open_browser_pane(url.clone(), ctx);
             }
@@ -27007,6 +27031,13 @@ impl View for Workspace {
                 .with_uniform_padding(WORKSPACE_PADDING)
                 .finish(),
         );
+
+        if let Some(pip) = PreviewRegistry::as_ref(app).picture_in_picture(self.window_id) {
+            stack.add_positioned_child(
+                ChildView::new(pip).finish(),
+                pip.as_ref(app).corner().positioning(),
+            );
+        }
 
         if !use_simplified_wasm_tab_bar
             && FeatureFlag::VerticalTabs.is_enabled()

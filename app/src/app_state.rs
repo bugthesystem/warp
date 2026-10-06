@@ -153,6 +153,9 @@ pub enum LeafContents {
     NetworkLog,
     /// The browser pane.
     Browser(BrowserPaneSnapshot),
+    /// The preview pane. Not persisted, since its previews are live streams of programs that may
+    /// not be running after a restart.
+    Preview,
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStarted,
 }
@@ -174,6 +177,7 @@ impl LeafContents {
             // starts empty on launch; persisting would also regress back to
             // an on-disk log via the app-state database.
             LeafContents::NetworkLog
+            | LeafContents::Preview
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
             | LeafContents::EnvironmentManagement(_) => false,

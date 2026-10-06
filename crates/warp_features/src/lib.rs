@@ -997,6 +997,10 @@ pub enum FeatureFlag {
 
     /// Enables the embedded web browser pane. Currently only supported on macOS.
     BrowserPane,
+
+    /// Enables the preview pane, which shows pages and other apps' windows live, and the preview
+    /// tools for agents.
+    PreviewPane,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1075,6 +1079,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LrcActivitySignal,
     FeatureFlag::StoredScreenshots,
     FeatureFlag::BrowserPane,
+    FeatureFlag::PreviewPane,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
