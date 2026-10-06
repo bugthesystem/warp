@@ -176,8 +176,10 @@ fn run(
         cdp.call(domain, json!({}), session)?;
     }
     set_viewport(&mut cdp, viewport, session)?;
-    cdp.call("Page.navigate", json!({"url": url}), session)?;
+    // Started on the blank page, so a navigation that moves the page to another process carries
+    // the screencast with it instead of racing it.
     set_rate(&mut cdp, rate, session)?;
+    cdp.call("Page.navigate", json!({"url": url}), session)?;
 
     let mut title = String::new();
     let mut page_url = String::new();
@@ -295,6 +297,9 @@ fn set_viewport(
     .map(|_| ())
 }
 
+/// How long to wait before starting a screencast again on a page that was moving between processes.
+const DETACHED_RETRY_DELAY: Duration = Duration::from_millis(400);
+
 fn set_rate(cdp: &mut Cdp, rate: Rate, session: Option<&str>) -> Result<(), String> {
     let (max_side, every_nth_frame) = match rate {
         Rate::Full => (FULL_MAX_SIDE, 1),
@@ -305,18 +310,22 @@ fn set_rate(cdp: &mut Cdp, rate: Rate, session: Option<&str>) -> Result<(), Stri
         }
     };
     cdp.call("Page.stopScreencast", json!({}), session)?;
-    cdp.call(
-        "Page.startScreencast",
-        json!({
-            "format": "jpeg",
-            "quality": jpeg::QUALITY,
-            "maxWidth": max_side,
-            "maxHeight": max_side,
-            "everyNthFrame": every_nth_frame,
-        }),
-        session,
-    )
-    .map(|_| ())
+    let params = json!({
+        "format": "jpeg",
+        "quality": jpeg::QUALITY,
+        "maxWidth": max_side,
+        "maxHeight": max_side,
+        "everyNthFrame": every_nth_frame,
+    });
+    match cdp.call("Page.startScreencast", params.clone(), session) {
+        // A page moving to another process is briefly detached; it answers again moments later.
+        Err(err) if err.contains("Not attached") => {
+            std::thread::sleep(DETACHED_RETRY_DELAY);
+            cdp.call("Page.startScreencast", params, session)
+                .map(|_| ())
+        }
+        result => result.map(|_| ()),
+    }
 }
 
 /// A line for the preview's log from a console message, uncaught error or browser log entry.
