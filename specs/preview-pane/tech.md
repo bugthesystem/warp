@@ -24,6 +24,10 @@ Step 1 uses a child `NSView` backed by an `AVSampleBufferDisplayLayer`, placed l
 
 Evaluated in the spike as the long-term option: draw frames inside WarpUI. ScreenCaptureKit buffers are `IOSurface`-backed, and Warp renders with Metal, so a WarpUI element could wrap the surface as a texture without copying. Tooltips, menus, rounded corners and clipping would then work normally over a live game. H.264 sources would need a `VTDecompressionSession` to get surfaces.
 
+## Picture-in-picture and stacks
+
+A preview is a stream (capture plus input mapping) owned by a model, independent of where it is shown, so a stream can move between a pane and the picture-in-picture window without restarting. The picture-in-picture window is a child `NSView` placed in the workspace's content area like a pane's view, with its own drag and resize handles drawn in WarpUI around it. A stack is a list of streams with one in front: the front stream renders at full size, the others into small layers (`AVSampleBufferDisplayLayer` per stream, scaled by Core Animation), and only visible streams keep capturing at full rate; background cards drop to a few frames per second.
+
 ## Agent tools
 
 Added to the local MCP server beside `browser_*`, behind the same token, and to the `warp-browser` plugin as a second skill:
@@ -49,6 +53,7 @@ Screen Recording for capture (check whether Warp already holds it through `compu
 
 0. **Spike (macOS, run by hand):** a debug command that streams one chosen window into an `AVSampleBufferDisplayLayer` at the pane's rect and clicks through `computer_use`. Tried on Blender, the Godot editor and a Godot game, the Unity editor and a Unity player, and the Defold editor. Settles: do engines accept posted events; does the layer take ScreenCaptureKit buffers as delivered; is a WarpUI-drawn surface worth it.
 1. **Watch-only pane:** `crates/warp_preview` (capture and presenter, stub elsewhere, as `warp_browser`), `PreviewPane`/`PreviewView`, the start page, `FeatureFlag::PreviewPane`, palette entry.
+1b. **Picture-in-picture and stacks:** streams owned by a model, the floating window, cards.
 2. **Playing:** pointer (all buttons), drag, scroll and keys; the Watching / Playing switch; focus.
 3. **Agent tools:** the `preview_*` tools, per-app approval, activity bar, skill.
 4. **iOS Simulator** through Baguette (`brew install baguette`, version-checked, never bundled), headless.
