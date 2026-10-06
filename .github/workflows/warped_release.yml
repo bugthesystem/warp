@@ -1,0 +1,61 @@
+name: Warped release
+
+# Builds Warped, this fork's temporary macOS build with the browser pane, and publishes it as a
+# GitHub release that the Homebrew cask downloads. Runs only in the fork.
+
+on:
+  push:
+    tags:
+      - "warped-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, such as 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.repository == 'bugthesystem/warp'
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: "26"
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ -n "${{ inputs.version }}" ]]; then
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME#warped-v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install build dependencies
+        run: |
+          brew install protobuf create-dmg
+          rustup target add aarch64-apple-darwin
+          ./script/install_cargo_bundle
+
+      - name: Build Warped
+        run: ./script/macos/release_warped "${{ steps.version.outputs.value }}" aarch64
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          ZIP="target/warped/Warped-$VERSION-aarch64.zip"
+          cp "$ZIP" target/warped/Warped.zip
+          gh release create "warped-v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "Warped $VERSION" \
+            --notes-file script/macos/warped_release_notes.md \
+            --latest \
+            "$ZIP" target/warped/Warped.zip
