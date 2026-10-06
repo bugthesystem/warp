@@ -32,6 +32,7 @@ const FIRST_FRAME_POLL: Duration = Duration::from_millis(150);
 /// Runs agents' preview tool calls on the main thread. Opening or looking at a page that is not
 /// local, or at another app's window, waits until the user allows it where the preview shows.
 pub struct PreviewAgent {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     requests_tx: async_channel::Sender<PreviewToolRequest>,
     /// Sites and apps the user always allows. Apps are keyed `app:<bundle id>`.
     approved: ApprovedSites,
@@ -87,6 +88,7 @@ impl PreviewAgent {
     }
 
     /// Where the MCP endpoint sends preview tool calls.
+    #[cfg(not(target_family = "wasm"))]
     pub fn requests(&self) -> async_channel::Sender<PreviewToolRequest> {
         self.requests_tx.clone()
     }

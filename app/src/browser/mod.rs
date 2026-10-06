@@ -12,7 +12,7 @@ mod view;
 use warp_browser::EditCommand;
 use warpui::actions::StandardAction;
 use warpui::keymap::FixedBinding;
-use warpui::{AppContext, SingletonEntity, View, id};
+use warpui::{AppContext, View, id};
 
 use crate::features::FeatureFlag;
 
@@ -40,6 +40,8 @@ pub fn agent_tools_enabled() -> bool {
 /// The router serving the local MCP endpoint with the tools that are enabled.
 #[cfg(not(target_family = "wasm"))]
 pub fn mcp_router(ctx: &AppContext) -> axum::Router {
+    use warpui::SingletonEntity as _;
+
     let channels = warp_browser::agent::ToolChannels {
         browser: is_enabled().then(|| BrowserAgent::as_ref(ctx).requests()),
         preview: crate::preview::is_enabled()
