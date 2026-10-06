@@ -18,6 +18,13 @@ pub use install::{
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use screencast::start_screencast;
 
+/// Ends the headless Chromium processes and removes the profiles that page previews of crashed
+/// Warp runs left behind. Blocks briefly, so call it off the main thread.
+pub fn clean_up_after_crashed_runs() {
+    #[cfg(not(target_family = "wasm"))]
+    screencast::clean_up_after_crashed_runs();
+}
+
 /// Chromium can't be installed from a web build.
 #[cfg(target_family = "wasm")]
 #[derive(Debug, thiserror::Error)]
