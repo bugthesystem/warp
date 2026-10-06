@@ -69,6 +69,49 @@ fn profile_dir() -> PathBuf {
     ))
 }
 
+/// Ends the Chromium processes and removes the profiles of previews from Warp runs that are no
+/// longer alive. Chromium outlives a crashed Warp, so its processes and profiles would otherwise
+/// stay behind.
+pub(crate) fn clean_up_after_crashed_runs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("warp-preview-"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if owner == std::process::id() || process_is_alive(owner) {
+            continue;
+        }
+        let profile = entry.path();
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// Kills Chromium when the stream ends, however it ends.
 struct Browser(Child);
 

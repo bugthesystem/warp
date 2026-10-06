@@ -128,7 +128,10 @@ impl PreviewStreams {
             return streams;
         }
         ctx.spawn(
-            async { warp_preview::browser::find_chromium(Some(&chromium_install_dir())) },
+            async {
+                warp_preview::browser::clean_up_after_crashed_runs();
+                warp_preview::browser::find_chromium(Some(&chromium_install_dir()))
+            },
             |me, found, ctx| {
                 me.chromium = match found {
                     Some(path) => ChromiumState::Found(path),
