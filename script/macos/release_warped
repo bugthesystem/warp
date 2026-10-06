@@ -6,12 +6,22 @@
 # ad-hoc signed rather than signed with an Apple Developer ID, so macOS quarantines it when
 # downloaded; the Homebrew cask clears that flag after installing.
 #
-# Usage: script/macos/release_warped <version> [aarch64|x86_64]
+# Usage: script/macos/release_warped [--fast] <version> [aarch64|x86_64]
 # Writes target/warped/Warped-<version>-<arch>.zip and prints its SHA-256.
+#
+# --fast builds with the plain release profile, skipping LTO: a rebuild takes minutes instead of
+# about 20 (it keeps incremental caches), for a slightly bigger and slower app. Use it for test builds, not for releases.
 
 set -eo pipefail
 
-VERSION="${1:?Usage: script/macos/release_warped <version> [aarch64|x86_64]}"
+PROFILE="release-lto"
+if [[ "$1" == "--fast" ]]; then
+  PROFILE="release"
+  export WARP_CARGO_PROFILE="$PROFILE"
+  shift
+fi
+
+VERSION="${1:?Usage: script/macos/release_warped [--fast] <version> [aarch64|x86_64]}"
 ARCH="${2:-aarch64}"
 BUNDLE_ID="dev.bugthesystem.Warped"
 
@@ -27,8 +37,13 @@ if (( FREE_GB < REQUIRED_GB )); then
   exit 1
 fi
 
-# A release build never reuses incremental caches, which would only take disk space.
-export CARGO_INCREMENTAL=0
+# A release build never reuses incremental caches, which would only take disk space. A fast build
+# does: it is meant to be rebuilt after small changes.
+if [[ "$PROFILE" == "release" ]]; then
+  export CARGO_INCREMENTAL=1
+else
+  export CARGO_INCREMENTAL=0
+fi
 
 FEATURES="browser_pane"
 # The preview pane lands separately; turn it on once its cargo feature exists.
@@ -42,7 +57,7 @@ OUT_DIR="target/warped"
 APP="$OUT_DIR/Warped.app"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
-cp -R "target/$ARCH-apple-darwin/release-lto/bundle/osx/WarpOss.app" "$APP"
+cp -R "target/$ARCH-apple-darwin/$PROFILE/bundle/osx/WarpOss.app" "$APP"
 
 PLIST="$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "Warped" "$PLIST"
@@ -69,4 +84,4 @@ echo "Built $ZIP"
 shasum -a 256 "$ZIP"
 
 # The zipped app is the release; the intermediate bundle takes a few GB and is rebuilt every time.
-rm -rf "target/$ARCH-apple-darwin/release-lto/bundle"
+rm -rf "target/$ARCH-apple-darwin/$PROFILE/bundle"
