@@ -5,7 +5,7 @@ Warped is not made or supported by Warp. It is Warp's open-source build with the
 ## Install
 
 ```sh
-brew install --cask bugthesystem/tap/warped
+brew tap bugthesystem/tap && brew install --cask warped
 ```
 
 Or download `Warped.zip`, unzip it into `/Applications`, then run this once:
