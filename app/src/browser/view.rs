@@ -352,9 +352,14 @@ impl BrowserView {
         self.attached
     }
 
-    /// Records whether the pane is in a pane group. Detaching ends annotate mode and rejects agent
-    /// calls waiting for approval here, since nobody can see the prompt.
+    /// Records whether the pane is in a pane group. Detaching silences its pages, ends annotate
+    /// mode and rejects agent calls waiting for approval here, since nobody can see the prompt.
     pub fn set_attached(&mut self, attached: bool, ctx: &mut ViewContext<Self>) {
+        if self.attached != attached {
+            for placed in self.tabs.iter().filter_map(|tab| tab.webview.as_ref()) {
+                placed.webview.set_media_suspended(!attached);
+            }
+        }
         self.attached = attached;
         if attached {
             return;
