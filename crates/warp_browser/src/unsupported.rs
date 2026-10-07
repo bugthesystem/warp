@@ -34,6 +34,10 @@ impl WebView {
         match self.0 {}
     }
 
+    pub fn set_media_suspended(&self, _suspended: bool) {
+        match self.0 {}
+    }
+
     pub fn load_url(&self, _url: &str) -> Result<(), Error> {
         match self.0 {}
     }

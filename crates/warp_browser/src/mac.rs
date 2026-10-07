@@ -3,14 +3,17 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Mutex;
 
-use block2::RcBlock;
+use block2::{DynBlock, RcBlock};
+use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
-use objc2::sel;
+use objc2::runtime::{AnyObject, Bool, Imp, Sel};
+use objc2::{msg_send, sel};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage,
     NSView,
 };
-use objc2_foundation::{NSDictionary, NSError, NSPoint, NSProcessInfo, NSString};
+use objc2_foundation::{NSDictionary, NSError, NSObjectProtocol, NSPoint, NSProcessInfo, NSString};
+use objc2_web_kit::WKWebView;
 use pathfinder_geometry::rect::RectF;
 use warpui::platform::mac::WindowExt;
 use warpui::{AppContext, WindowId};
@@ -104,6 +107,7 @@ impl WebView {
                 });
             })
             .build_as_child(parent)?;
+        allow_pointer_lock(&webview.webview());
 
         Ok(Self { webview })
     }
@@ -114,7 +118,21 @@ impl WebView {
     }
 
     pub fn set_visible(&self, visible: bool) -> Result<(), Error> {
+        if !visible {
+            // A page that is no longer shown must not keep the pointer hidden and captured.
+            self.webview.evaluate_script("document.exitPointerLock()")?;
+        }
         Ok(self.webview.set_visible(visible)?)
+    }
+
+    /// Pauses every sound and video in the page and keeps the page from starting any, or lifts
+    /// that. WebKit expects the two to be called in pairs.
+    pub fn set_media_suspended(&self, suspended: bool) {
+        let view = self.webview.webview();
+        if view.respondsToSelector(sel!(setAllMediaPlaybackSuspended:completionHandler:)) {
+            // SAFETY: the selector was checked above, and the completion handler is optional.
+            unsafe { view.setAllMediaPlaybackSuspended_completionHandler(suspended, None) };
+        }
     }
 
     pub fn load_url(&self, url: &str) -> Result<(), Error> {
@@ -230,6 +248,58 @@ impl WebView {
     pub fn focus_parent(&self) -> Result<(), Error> {
         Ok(self.webview.focus_parent()?)
     }
+}
+
+impl Drop for WebView {
+    fn drop(&mut self) {
+        // wry removes the web view from the window but keeps it alive, so a page that is not
+        // closed keeps running unseen, and its audio keeps playing.
+        let view = self.webview.webview();
+        if view.respondsToSelector(sel!(_close)) {
+            // SAFETY: `_close` takes no arguments and returns nothing.
+            let _: () = unsafe { msg_send![&*view, _close] };
+        } else {
+            let _ = self.webview.load_url("about:blank");
+        }
+    }
+}
+
+/// Lets pages in `view` lock the pointer, which games use for mouse look. WebKit denies the
+/// request unless the web view's UI delegate answers it, and wry's delegate does not, so the
+/// answer is added to that delegate's class. Pressing Escape releases the pointer.
+fn allow_pointer_lock(view: &WKWebView) {
+    extern "C-unwind" fn did_request_pointer_lock(
+        _delegate: &AnyObject,
+        _selector: Sel,
+        _view: &AnyObject,
+        completion_handler: &DynBlock<dyn Fn(Bool)>,
+    ) {
+        completion_handler.call((Bool::YES,));
+    }
+
+    // SAFETY: `UIDelegate` returns an object or nil.
+    let delegate: Option<Retained<AnyObject>> = unsafe { msg_send![view, UIDelegate] };
+    let Some(delegate) = delegate else {
+        return;
+    };
+    // SAFETY: the implementation's signature matches the type encoding, which is that of
+    // `-_webViewDidRequestPointerLock:completionHandler:`. Adding a method the class already has
+    // does nothing.
+    unsafe {
+        class_addMethod(
+            std::ptr::from_ref(delegate.class()).cast_mut(),
+            sel!(_webViewDidRequestPointerLock:completionHandler:),
+            std::mem::transmute::<
+                extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, &DynBlock<dyn Fn(Bool)>),
+                Imp,
+            >(did_request_pointer_lock),
+            c"v@:@@?".as_ptr(),
+        );
+    }
+    // WebKit records which methods a delegate has when the delegate is set.
+    // SAFETY: `setUIDelegate:` takes an object, which the web view references weakly; wry keeps
+    // the delegate alive.
+    let _: () = unsafe { msg_send![view, setUIDelegate: &*delegate] };
 }
 
 fn png_data(image: &NSImage) -> Option<Vec<u8>> {
