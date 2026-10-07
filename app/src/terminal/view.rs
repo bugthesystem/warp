@@ -19234,7 +19234,9 @@ impl TerminalView {
             && warp_browser::is_supported()
             && warp_browser::is_local_address(uri)
         {
-            ctx.dispatch_typed_action(&WorkspaceAction::OpenBrowserPane {
+            // Deferred: adding the pane moves focus off this terminal, which updates this view,
+            // and it is still mid-update handling the click.
+            ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenBrowserPane {
                 url: Some(uri.to_owned()),
             });
         } else {
