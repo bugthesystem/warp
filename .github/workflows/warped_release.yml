@@ -42,6 +42,8 @@ jobs:
           brew install protobuf create-dmg
           rustup target add aarch64-apple-darwin
           ./script/install_cargo_bundle
+          # The bundle script generates third-party licenses with cargo-about.
+          ./script/install_cargo_release_deps --no-build-deps
 
       - name: Build Warped
         run: ./script/macos/release_warped "${{ steps.version.outputs.value }}" aarch64
