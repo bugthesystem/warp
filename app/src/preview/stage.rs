@@ -608,21 +608,23 @@ fn render_bar<A: Action + Clone>(
             Some(wrap(StageAction::Screenshot)),
             appearance,
         ))
-        .with_child(if matches!(
-            front.map(|preview| &preview.source),
-            Some(Source::Simulator(_))
-        ) {
-            bar_button(
-                Icon::RefreshCw04,
-                "Rotate simulator",
-                BarButtonState::Normal,
-                &mouse_states.rotate,
-                Some(wrap(StageAction::Rotate)),
-                appearance,
-            )
-        } else {
-            Empty::new().finish()
-        })
+        .with_child(
+            if matches!(
+                front.map(|preview| &preview.source),
+                Some(Source::Simulator(_))
+            ) {
+                bar_button(
+                    Icon::RefreshCw04,
+                    "Rotate simulator",
+                    BarButtonState::Normal,
+                    &mouse_states.rotate,
+                    Some(wrap(StageAction::Rotate)),
+                    appearance,
+                )
+            } else {
+                Empty::new().finish()
+            },
+        )
         .with_child(bar_button(
             picture_in_picture_icon,
             picture_in_picture_tip,
